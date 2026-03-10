@@ -32,7 +32,6 @@ function DebatePageContent() {
   const [selectedRoundIndex, setSelectedRoundIndex] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
-  const hasStartedRun = useRef(false)
   const completedRef = useRef(false)
   const activeRoundRef = useRef<HTMLDivElement | null>(null)
   const liveHistoryRoundRef = useRef<HTMLDivElement | null>(null)
@@ -45,11 +44,9 @@ function DebatePageContent() {
   const moderatorIntro = result?.summary ?? streamState?.moderatorIntro ?? null
 
   useEffect(() => {
-    if (!debateId || hasStartedRun.current) {
+    if (!debateId) {
       return
     }
-
-    hasStartedRun.current = true
     const currentDebateId = debateId
     let isCancelled = false
     let socket: WebSocket | null = null
@@ -125,7 +122,6 @@ function DebatePageContent() {
           }
 
           const streamEvent = payload as DebateStreamEvent
-
           if (payload.type === 'error') {
             setError(payload.message ?? '实时辩论连接失败，请稍后重试。')
             setLoading(false)
