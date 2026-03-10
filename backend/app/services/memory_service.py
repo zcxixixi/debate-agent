@@ -1,28 +1,59 @@
 """Memory service using Mem0 for storing debate history."""
 
-from typing import Optional
 from datetime import datetime
+from typing import Any, Optional
 
 try:
-    from mem0 import Memory
+    from mem0 import MemoryClient
+
     MEM0_AVAILABLE = True
 except ImportError:
+    MemoryClient = None
     MEM0_AVAILABLE = False
 
 
 class MemoryService:
     """Service for managing debate memory using Mem0."""
 
-    def __init__(self, api_key: Optional[str] = None):
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        host: Optional[str] = None,
+        org_id: Optional[str] = None,
+        project_id: Optional[str] = None,
+    ):
         self.enabled = MEM0_AVAILABLE and bool(api_key)
+        self.memory = None
         if self.enabled:
             try:
-                self.memory = Memory(api_key=api_key)
+                self.memory = MemoryClient(
+                    api_key=api_key,
+                    host=host,
+                    org_id=org_id,
+                    project_id=project_id,
+                )
             except Exception as e:
                 print(f"Warning: Failed to initialize Mem0: {e}")
                 self.enabled = False
-        else:
-            self.memory = None
+
+    def _extract_memory_id(self, result_data: Any) -> Optional[str]:
+        """Extract a memory identifier from Mem0 responses."""
+        if not isinstance(result_data, dict):
+            return None
+
+        memory_id = result_data.get("id")
+        if isinstance(memory_id, str) and memory_id:
+            return memory_id
+
+        results = result_data.get("results")
+        if isinstance(results, list) and results:
+            first_result = results[0]
+            if isinstance(first_result, dict):
+                nested_id = first_result.get("id")
+                if isinstance(nested_id, str) and nested_id:
+                    return nested_id
+
+        return None
 
     def store_debate(
         self,
@@ -52,7 +83,7 @@ class MemoryService:
                 user_id=user_id,
                 metadata=metadata or {},
             )
-            return result_data.get("id") if result_data else None
+            return self._extract_memory_id(result_data)
         except Exception as e:
             print(f"Warning: Failed to store memory: {e}")
             return None
@@ -86,7 +117,7 @@ class MemoryService:
                     "type": "round_summary",
                 },
             )
-            return result.get("id") if result else None
+            return self._extract_memory_id(result)
         except Exception as e:
             print(f"Warning: Failed to store round memory: {e}")
             return None
@@ -97,10 +128,10 @@ class MemoryService:
             return ""
 
         try:
-            memories = self.memory.search(query, user_id=user_id)
+            memories = self.memory.search(query, user_id=user_id, limit=5)
             if memories and "results" in memories:
                 context_parts = []
-                for mem in memories["results"][:5]:  # Top 5 relevant memories
+                for mem in memories["results"]:
                     memory_text = mem.get("memory", "")
                     if memory_text:
                         context_parts.append(memory_text)
