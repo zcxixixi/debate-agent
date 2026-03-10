@@ -191,6 +191,11 @@ export const advanceDebatePlayback = (
       continue
     }
 
+    // 如果 displayedRound 不存在，说明是新轮次，需要直接返回
+    if (!displayedRound) {
+      return nextDebate
+    }
+
     if (liveRound.positive !== (displayedRound?.positive ?? '')) {
       nextRound.positive = advanceTextPlayback(
         liveRound.positive,

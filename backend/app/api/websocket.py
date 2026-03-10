@@ -107,7 +107,6 @@ async def stream_debate(
 
     moderator_task = asyncio.create_task(send_moderator_intro())
 
-    summary_tasks: list[tuple[int, asyncio.Task[str]]] = []
     positive_last_point = None
     negative_last_point = None
 
@@ -138,10 +137,7 @@ async def stream_debate(
                 "message": "正方思考中...",
             })
 
-            positive_chunks = []
-
             async def positive_callback(chunk: str):
-                positive_chunks.append(chunk)
                 await websocket.send_json({
                     "type": "stream",
                     "agent": "positive",
@@ -171,10 +167,7 @@ async def stream_debate(
                 "message": "反方思考中...",
             })
 
-            negative_chunks = []
-
             async def negative_callback(chunk: str):
-                negative_chunks.append(chunk)
                 await websocket.send_json({
                     "type": "stream",
                     "agent": "negative",
@@ -207,32 +200,8 @@ async def stream_debate(
             state.positive_points.append(positive_arg)
             state.negative_points.append(negative_arg)
 
-            summary_tasks.append((
-                round_num,
-                asyncio.create_task(
-                    asyncio.to_thread(
-                        debate_service._generate_round_summary,
-                        round_num,
-                        positive_arg,
-                        negative_arg,
-                    )
-                ),
-            ))
-
             # Save state after each round
             debate_service._save_debate(state)
-
-        round_summaries_by_round = {}
-        for round_num, summary_task in summary_tasks:
-            try:
-                round_summaries_by_round[round_num] = await summary_task
-            except Exception:
-                round_summaries_by_round[round_num] = ""
-
-        round_summaries = [
-            round_summaries_by_round.get(round_num, "")
-            for round_num in range(1, state.total_rounds + 1)
-        ]
 
         if not moderator_task.done():
             await moderator_task
@@ -249,7 +218,6 @@ async def stream_debate(
             topic=state.topic,
             context=state.context,
             arguments=[arg.model_dump() for arg in state.arguments],
-            round_summaries=round_summaries,
         )
 
         judgment_result = debate_service.judgment_agent.parse_judgment(judgment)
@@ -299,13 +267,9 @@ async def stream_debate(
     except WebSocketDisconnect:
         # Save state on disconnect
         moderator_task.cancel()
-        for _, summary_task in summary_tasks:
-            summary_task.cancel()
         debate_service._save_debate(state)
     except Exception as e:
         moderator_task.cancel()
-        for _, summary_task in summary_tasks:
-            summary_task.cancel()
         await websocket.send_json({
             "type": "error",
             "message": str(e),

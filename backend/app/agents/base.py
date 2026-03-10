@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from typing import Optional, AsyncGenerator
-from openai import OpenAI
+from openai import OpenAI, AsyncOpenAI
 
 
 class BaseDebateAgent(ABC):
@@ -14,7 +14,8 @@ class BaseDebateAgent(ABC):
         role_name: str,
         system_prompt: str,
     ):
-        self.client = OpenAI(api_key=api_key, base_url=base_url)
+        self.sync_client = OpenAI(api_key=api_key, base_url=base_url)
+        self.async_client = AsyncOpenAI(api_key=api_key, base_url=base_url)
         self.model = model
         self.role_name = role_name
         self.system_prompt = system_prompt
@@ -35,7 +36,7 @@ class BaseDebateAgent(ABC):
 
         messages.append({"role": "user", "content": user_message})
 
-        response = self.client.chat.completions.create(
+        response = self.sync_client.chat.completions.create(
             model=self.model,
             messages=messages,
             temperature=temperature,
@@ -63,7 +64,7 @@ class BaseDebateAgent(ABC):
         messages.append({"role": "user", "content": user_message})
 
         try:
-            stream = self.client.chat.completions.create(
+            stream = self.sync_client.chat.completions.create(
                 model=self.model,
                 messages=messages,
                 temperature=temperature,
@@ -99,8 +100,6 @@ class BaseDebateAgent(ABC):
         Returns:
             The complete response text
         """
-        import asyncio
-
         messages = [{"role": "system", "content": self.system_prompt}]
 
         if conversation_history:
@@ -111,7 +110,7 @@ class BaseDebateAgent(ABC):
         full_response = ""
 
         try:
-            stream = self.client.chat.completions.create(
+            stream = await self.async_client.chat.completions.create(
                 model=self.model,
                 messages=messages,
                 temperature=temperature,
@@ -119,7 +118,7 @@ class BaseDebateAgent(ABC):
                 stream=True,
             )
 
-            for chunk in stream:
+            async for chunk in stream:
                 if chunk.choices and chunk.choices[0].delta.content:
                     content = chunk.choices[0].delta.content
                     full_response += content
@@ -127,9 +126,6 @@ class BaseDebateAgent(ABC):
                     # Call streaming callback if provided
                     if stream_callback:
                         await stream_callback(content)
-                    else:
-                        # Small yield to prevent blocking
-                        await asyncio.sleep(0)
 
         except Exception as e:
             error_msg = f"[生成错误: {str(e)[:100]}]"

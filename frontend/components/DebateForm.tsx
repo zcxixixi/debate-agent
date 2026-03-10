@@ -13,8 +13,6 @@ export default function DebateForm() {
     if (!topic.trim()) return
 
     setLoading(true)
-    // TODO: Connect to real API
-    // For now, simulate and redirect
     setTimeout(() => {
       router.push('/debate')
     }, 500)
@@ -28,36 +26,36 @@ export default function DebateForm() {
   ]
 
   return (
-    <div className="bg-white rounded-xl shadow-lg p-8">
+    <div className="bg-white rounded-2xl shadow-soft-lg p-8">
       <form onSubmit={handleSubmit}>
-        <label className="block text-lg font-medium text-gray-700 mb-3">
+        <label className="block text-sm font-medium text-primary mb-3">
           请输入您的辩论话题
         </label>
         <textarea
           value={topic}
           onChange={(e) => setTopic(e.target.value)}
           placeholder="例如：我是个学生，应该买车吗？"
-          className="w-full p-4 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none text-gray-800"
+          className="w-full p-4 border border-black/[0.06] rounded-2xl text-sm text-primary placeholder:text-tertiary resize-none transition-all duration-200 hover:border-black/[0.1] focus:outline-none focus:border-black/20 focus:ring-4 focus:ring-black/[0.03]"
           rows={3}
         />
 
         <button
           type="submit"
           disabled={loading || !topic.trim()}
-          className="mt-4 w-full py-3 px-6 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
+          className="mt-4 w-full py-3 px-6 bg-primary text-white text-sm font-medium rounded-full hover:bg-primary/90 disabled:bg-black/20 disabled:cursor-not-allowed transition-all duration-200"
         >
-          {loading ? '开始辩论...' : '🚀 开始辩论'}
+          {loading ? '开始辩论...' : '开始辩论'}
         </button>
       </form>
 
-      <div className="mt-6 pt-6 border-t border-gray-200">
-        <p className="text-sm text-gray-500 mb-3">💡 示例话题：</p>
-        <div className="flex flex-wrap gap-2">
+      <div className="mt-6 pt-6 border-t border-black/[0.04]">
+        <p className="text-xs text-tertiary mb-3 text-center uppercase tracking-wider">示例话题</p>
+        <div className="flex flex-wrap justify-center gap-2">
           {examples.map((example, index) => (
             <button
               key={index}
               onClick={() => setTopic(example)}
-              className="px-3 py-1.5 bg-gray-100 text-gray-700 text-sm rounded-full hover:bg-gray-200 transition-colors"
+              className="px-4 py-2 text-xs bg-black/[0.02] text-secondary rounded-full hover:bg-black/[0.04] hover:text-primary transition-colors"
             >
               {example}
             </button>
