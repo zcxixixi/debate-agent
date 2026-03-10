@@ -243,17 +243,6 @@ class DebateService:
             summary=None,
         )
 
-    def _generate_round_summary(
-        self,
-        round_num: int,
-        positive_arg: str,
-        negative_arg: str,
-    ) -> str:
-        """Generate a summary for the round using moderator."""
-        return self.moderator_agent.summarize_round(
-            round_num, positive_arg, negative_arg
-        )
-
     def run_debate(self, debate_id: str) -> DebateResult:
         """Run the full debate and return the result."""
         state = self.get_debate(debate_id)
@@ -279,9 +268,6 @@ class DebateService:
             state.topic, state.context
         )
 
-        # Track round summaries for long context handling
-        round_summaries: list[str] = []
-
         # Resume from the last completed round instead of replaying everything.
         positive_last_point = state.arguments[-1].positive if state.arguments else None
         negative_last_point = state.arguments[-1].negative if state.arguments else None
@@ -290,7 +276,7 @@ class DebateService:
         for round_num in range(start_round, state.total_rounds + 1):
             state.current_round = round_num
 
-            # Build context with memory and previous summaries
+            # Build context with memory
             enhanced_context = state.context or ""
             if user_context:
                 enhanced_context = f"{enhanced_context}\n\n历史背景：{user_context}"
@@ -323,24 +309,14 @@ class DebateService:
             state.positive_points.append(positive_arg)
             state.negative_points.append(negative_arg)
 
-            # Generate round summary for long context handling
-            try:
-                summary = self._generate_round_summary(
-                    round_num, positive_arg, negative_arg
-                )
-            except Exception:
-                summary = ""
-            round_summaries.append(summary)
-
             # Save state after each round
             self._save_debate(state)
 
-        # Get judgment with round summaries to avoid recency bias
+        # Get judgment
         judgment = self.judgment_agent.judge(
             topic=state.topic,
             context=state.context,
             arguments=[arg.model_dump() for arg in state.arguments],
-            round_summaries=round_summaries,
         )
 
         # Parse judgment to determine winner
@@ -356,8 +332,10 @@ class DebateService:
             topic=state.topic,
             winner=winner,
             judgment=judgment,
-            recommendation=judgment_result.recommendation or
-            self._extract_recommendation(judgment),
+            recommendation=(
+                judgment_result.recommendation
+                or self._extract_recommendation(judgment)
+            ),
             arguments=state.arguments,
             summary=moderator_intro,
         )
