@@ -1,6 +1,7 @@
-from pydantic import BaseModel, Field
-from typing import Optional
 from enum import Enum
+from typing import Optional
+
+from pydantic import BaseModel, Field, field_validator
 
 
 class DebateStatus(str, Enum):
@@ -24,9 +25,26 @@ class ArgumentRound(BaseModel):
 
 class DebateStartRequest(BaseModel):
     """Request to start a new debate."""
-    topic: str = Field(description="辩论话题")
+
+    topic: str = Field(min_length=1, max_length=500, description="辩论话题")
     context: Optional[str] = Field(default=None, description="用户提供的背景信息")
     rounds: int = Field(default=3, ge=1, le=5, description="辩论轮数")
+
+    @field_validator("topic")
+    @classmethod
+    def validate_topic(cls, value: str) -> str:
+        topic = value.strip()
+        if not topic:
+            raise ValueError("topic cannot be empty")
+        return topic
+
+    @field_validator("context")
+    @classmethod
+    def normalize_context(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        context = value.strip()
+        return context or None
 
 
 class DebateStartResponse(BaseModel):
@@ -34,7 +52,7 @@ class DebateStartResponse(BaseModel):
     debate_id: str
     status: DebateStatus
     current_round: int
-    arguments: list[ArgumentRound] = []
+    arguments: list[ArgumentRound] = Field(default_factory=list)
 
 
 class DebateResult(BaseModel):
@@ -56,6 +74,6 @@ class DebateState(BaseModel):
     total_rounds: int = 3
     current_round: int = 0
     status: DebateStatus = DebateStatus.PENDING
-    arguments: list[ArgumentRound] = []
-    positive_points: list[str] = []
-    negative_points: list[str] = []
+    arguments: list[ArgumentRound] = Field(default_factory=list)
+    positive_points: list[str] = Field(default_factory=list)
+    negative_points: list[str] = Field(default_factory=list)

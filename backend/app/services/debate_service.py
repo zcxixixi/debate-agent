@@ -23,13 +23,13 @@ from app.agents import (
 from app.services.memory_service import MemoryService
 
 # Database path
-DB_PATH = Path(__file__).parent.parent.parent / "data" / "debates.db"
+DEFAULT_DB_PATH = Path(__file__).parent.parent.parent / "data" / "debates.db"
 
 
-def init_database():
+def init_database(db_path: Path):
     """Initialize SQLite database for persistence."""
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(DB_PATH))
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(db_path))
     cursor = conn.cursor()
 
     cursor.execute("""
@@ -69,9 +69,14 @@ class DebateService:
 
     def __init__(self):
         settings = get_settings()
+        self.db_path = (
+            Path(settings.database_path).expanduser()
+            if settings.database_path
+            else DEFAULT_DB_PATH
+        )
 
         # Initialize database
-        init_database()
+        init_database(self.db_path)
 
         # Initialize agents
         self.positive_agent = PositiveAgent(
@@ -127,7 +132,7 @@ class DebateService:
 
     def _save_debate(self, state: DebateState):
         """Save debate state to database."""
-        conn = sqlite3.connect(str(DB_PATH))
+        conn = sqlite3.connect(str(self.db_path))
         cursor = conn.cursor()
 
         cursor.execute("""
@@ -152,7 +157,7 @@ class DebateService:
 
     def _load_debate(self, debate_id: str) -> Optional[DebateState]:
         """Load debate state from database."""
-        conn = sqlite3.connect(str(DB_PATH))
+        conn = sqlite3.connect(str(self.db_path))
         cursor = conn.cursor()
 
         cursor.execute(
@@ -189,7 +194,7 @@ class DebateService:
 
     def _save_result(self, result: DebateResult):
         """Save debate result to database."""
-        conn = sqlite3.connect(str(DB_PATH))
+        conn = sqlite3.connect(str(self.db_path))
         cursor = conn.cursor()
 
         cursor.execute("""
@@ -205,6 +210,38 @@ class DebateService:
 
         conn.commit()
         conn.close()
+
+    def get_result(self, debate_id: str) -> Optional[DebateResult]:
+        """Load a previously saved debate result."""
+        state = self.get_debate(debate_id)
+        if not state:
+            return None
+
+        conn = sqlite3.connect(str(self.db_path))
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT winner, judgment, recommendation
+            FROM debate_results
+            WHERE debate_id = ?
+            """,
+            (debate_id,),
+        )
+        row = cursor.fetchone()
+        conn.close()
+
+        if not row:
+            return None
+
+        return DebateResult(
+            debate_id=debate_id,
+            topic=state.topic,
+            winner=DebateWinner(row[0]),
+            judgment=row[1],
+            recommendation=row[2],
+            arguments=state.arguments,
+            summary=None,
+        )
 
     def _generate_round_summary(
         self,
@@ -222,6 +259,10 @@ class DebateService:
         state = self.get_debate(debate_id)
         if not state:
             raise ValueError(f"Debate {debate_id} not found")
+
+        existing_result = self.get_result(debate_id)
+        if state.status == DebateStatus.COMPLETED and existing_result:
+            return existing_result
 
         state.status = DebateStatus.IN_PROGRESS
 
@@ -241,11 +282,12 @@ class DebateService:
         # Track round summaries for long context handling
         round_summaries: list[str] = []
 
-        # Run debate rounds
-        positive_last_point = None
-        negative_last_point = None
+        # Resume from the last completed round instead of replaying everything.
+        positive_last_point = state.arguments[-1].positive if state.arguments else None
+        negative_last_point = state.arguments[-1].negative if state.arguments else None
+        start_round = state.current_round + 1 if state.arguments else 1
 
-        for round_num in range(1, state.total_rounds + 1):
+        for round_num in range(start_round, state.total_rounds + 1):
             state.current_round = round_num
 
             # Build context with memory and previous summaries
@@ -282,9 +324,12 @@ class DebateService:
             state.negative_points.append(negative_arg)
 
             # Generate round summary for long context handling
-            summary = self._generate_round_summary(
-                round_num, positive_arg, negative_arg
-            )
+            try:
+                summary = self._generate_round_summary(
+                    round_num, positive_arg, negative_arg
+                )
+            except Exception:
+                summary = ""
             round_summaries.append(summary)
 
             # Save state after each round
@@ -403,6 +448,8 @@ class DebateService:
             negative=negative_arg,
         )
         state.arguments.append(round_data)
+        state.positive_points.append(positive_arg)
+        state.negative_points.append(negative_arg)
 
         # Save state
         self._save_debate(state)
@@ -415,7 +462,7 @@ class DebateService:
 
     def get_all_debates(self) -> list[dict]:
         """Get all debates from database."""
-        conn = sqlite3.connect(str(DB_PATH))
+        conn = sqlite3.connect(str(self.db_path))
         cursor = conn.cursor()
 
         cursor.execute("""
@@ -439,7 +486,7 @@ class DebateService:
 
     def delete_debate(self, debate_id: str) -> bool:
         """Delete a debate from database."""
-        conn = sqlite3.connect(str(DB_PATH))
+        conn = sqlite3.connect(str(self.db_path))
         cursor = conn.cursor()
 
         cursor.execute("DELETE FROM debate_results WHERE debate_id = ?", (debate_id,))

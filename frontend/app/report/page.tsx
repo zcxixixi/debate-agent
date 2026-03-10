@@ -1,91 +1,164 @@
 'use client'
 
-import { useRouter } from 'next/navigation'
+import { Suspense, useEffect, useMemo, useState } from 'react'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
+import { DebateResult, DebateState, fetchDebate, fetchResult } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
-// Mock report data
-const mockReportData = {
-  id: '1',
-  topic: '我是个学生，应该买车吗？',
-  winner: 'negative' as const,
-  summary: '经过三轮激烈辩论，反方在本次辩论中表现更为出色。',
-  analysis: '反方成功论证了学生在校期间购车面临的多重现实挑战，包括经济压力、时间成本和机会成本。反方的论点更加切合学生实际生活状况，并提出了替代方案（先考驾照，毕业后购车），具有更强的现实指导意义。',
-  recommendation: '建议学生阶段优先投资于学业和个人成长，可先考取驾照为未来做准备，待毕业并有稳定收入后再考虑购车。如果确实有特殊用车需求，可以考虑租车或使用共享汽车等灵活方案。',
-  scores: {
-    positive: 72,
-    negative: 85,
-  },
-  keyPoints: {
-    positive: [
-      '提高生活效率和便利性',
-      '扩大机会范围（实习、活动）',
-      '学习重要生活技能',
-      '紧急情况机动能力',
-    ],
-    negative: [
-      '经济负担沉重',
-      '分散学业注意力',
-      '校园公共交通便利',
-      '资源投入回报率低',
-    ],
-  },
+function extractHighlights(points: string[]): string[] {
+  return points
+    .map((point) => point.trim())
+    .filter(Boolean)
+    .slice(0, 3)
 }
 
-export default function ReportPage() {
+function ReportPageContent() {
+  const [result, setResult] = useState<DebateResult | null>(null)
+  const [debate, setDebate] = useState<DebateState | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
   const router = useRouter()
-  const winner = mockReportData.winner as 'positive' | 'negative'
-  const winnerText = winner === 'positive' ? '正方' : '反方'
-  const winnerColor = winner === 'positive' ? 'text-blue-600' : 'text-rose-600'
-  const winnerBg = winner === 'positive' ? 'bg-blue-50' : 'bg-rose-50'
-  const winnerGradient = winner === 'positive'
-    ? 'from-blue-500 to-cyan-500'
-    : 'from-rose-500 to-orange-500'
+  const searchParams = useSearchParams()
+  const debateId = searchParams.get('id')
+
+  useEffect(() => {
+    if (!debateId) {
+      setLoading(false)
+      setError('缺少辩论 ID，请返回首页重新开始。')
+      return
+    }
+
+    const currentDebateId = debateId
+
+    async function loadReport() {
+      try {
+        setLoading(true)
+        setError(null)
+
+        const [debateState, debateResult] = await Promise.all([
+          fetchDebate(currentDebateId),
+          fetchResult(currentDebateId),
+        ])
+
+        setDebate(debateState)
+        setResult(debateResult)
+      } catch (err) {
+        setError(err instanceof Error ? err.message : '加载最终判决失败，请稍后重试。')
+      } finally {
+        setLoading(false)
+      }
+    }
+
+    void loadReport()
+  }, [debateId])
+
+  const winner = result?.winner ?? 'draw'
+  const winnerText =
+    winner === 'positive' ? '正方' : winner === 'negative' ? '反方' : '平局'
+  const winnerColor =
+    winner === 'positive'
+      ? 'text-accent-blue'
+      : winner === 'negative'
+        ? 'text-accent-red'
+        : 'text-primary'
+  const winnerBg =
+    winner === 'positive'
+      ? 'bg-accent-blue/5'
+      : winner === 'negative'
+        ? 'bg-accent-red/5'
+        : 'bg-black/[0.03]'
+  const positiveHighlights = useMemo(
+    () => extractHighlights(debate?.positive_points ?? []),
+    [debate]
+  )
+  const negativeHighlights = useMemo(
+    () => extractHighlights(debate?.negative_points ?? []),
+    [debate]
+  )
+  const totalRounds = debate?.arguments.length ?? result?.arguments.length ?? 0
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-zinc-50 to-white px-4 py-12">
-      <div className="max-w-4xl mx-auto">
+    <div className="min-h-screen bg-surface-subtle px-6 py-12">
+      <div className="max-w-3xl mx-auto">
+        {loading ? (
+          <Card className="border-0 mb-6">
+            <CardContent className="p-8 text-center">
+              <div className="mx-auto mb-4 h-8 w-8 animate-spin rounded-full border-2 border-black/10 border-t-primary" />
+              <p className="text-primary font-medium mb-2">正在加载最终判决</p>
+              <p className="text-sm text-secondary">后端返回完整结果后，这里会显示胜方与建议。</p>
+            </CardContent>
+          </Card>
+        ) : null}
+
+        {error ? (
+          <Card className="border-0 mb-6">
+            <CardContent className="p-6 text-center">
+              <p className="text-accent-red mb-3">{error}</p>
+              <Button variant="outline" onClick={() => router.push('/')}>
+                返回首页
+              </Button>
+            </CardContent>
+          </Card>
+        ) : null}
+
+        {!loading && !error && result ? (
+          <>
         {/* Winner Banner */}
-        <div className={cn("rounded-3xl p-8 text-center mb-8", winnerBg)}>
-          <div className="inline-flex items-center justify-center w-20 h-20 rounded-full bg-white shadow-lg mb-4">
-            <span className="text-4xl">{winner === 'positive' ? '🔵' : '🔴'}</span>
+        <div className={cn("rounded-3xl p-8 text-center mb-6", winnerBg)}>
+          <div className="inline-flex items-center justify-center w-14 h-14 rounded-full bg-white shadow-soft mb-3">
+            {winner === 'positive' ? (
+              <svg className="w-7 h-7 text-accent-blue" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+              </svg>
+            ) : winner === 'negative' ? (
+              <svg className="w-7 h-7 text-accent-red" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            ) : (
+              <svg className="w-7 h-7 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 12h14" />
+              </svg>
+            )}
           </div>
-          <h1 className={cn("text-3xl font-bold mb-2", winnerColor)}>
+          <h1 className={cn("text-2xl font-semibold mb-1", winnerColor)}>
             {winnerText}获胜
           </h1>
-          <p className="text-zinc-600 max-w-md mx-auto">{mockReportData.summary}</p>
+          <p className="text-sm text-secondary max-w-xl mx-auto">
+            {result.summary ?? `${winnerText}在本轮辩论中获得最终胜出。`}
+          </p>
         </div>
 
-        {/* Score Cards */}
-        <div className="grid md:grid-cols-2 gap-4 mb-8">
+        {/* Debate Stats */}
+        <div className="grid md:grid-cols-2 gap-3 mb-6">
           <Card className="border-0 overflow-hidden">
-            <div className="h-1 bg-gradient-to-r from-blue-500 to-cyan-500" />
-            <CardContent className="p-6">
-              <div className="flex items-center justify-between mb-4">
-                <span className="text-lg font-semibold text-blue-700">正方得分</span>
-                <span className="text-3xl font-bold text-zinc-900">{mockReportData.scores.positive}</span>
+            <div className="h-0.5 bg-accent-blue" />
+            <CardContent className="p-5">
+              <div className="flex items-center justify-between mb-3">
+                <span className="text-sm font-medium text-accent-blue">总轮次</span>
+                <span className="text-2xl font-semibold text-primary">{totalRounds}</span>
               </div>
-              <div className="h-3 bg-zinc-100 rounded-full overflow-hidden">
+              <div className="h-1.5 bg-black/[0.03] rounded-full overflow-hidden">
                 <div
-                  className="h-full bg-gradient-to-r from-blue-500 to-cyan-500 rounded-full transition-all duration-1000"
-                  style={{ width: `${mockReportData.scores.positive}%` }}
+                  className="h-full bg-accent-blue rounded-full transition-all duration-1000"
+                  style={{ width: `${Math.min(totalRounds * 20, 100)}%` }}
                 />
               </div>
             </CardContent>
           </Card>
 
           <Card className="border-0 overflow-hidden">
-            <div className="h-1 bg-gradient-to-r from-rose-500 to-orange-500" />
-            <CardContent className="p-6">
-              <div className="flex items-center justify-between mb-4">
-                <span className="text-lg font-semibold text-rose-700">反方得分</span>
-                <span className="text-3xl font-bold text-zinc-900">{mockReportData.scores.negative}</span>
+            <div className="h-0.5 bg-accent-red" />
+            <CardContent className="p-5">
+              <div className="flex items-center justify-between mb-3">
+                <span className="text-sm font-medium text-accent-red">已生成论点</span>
+                <span className="text-2xl font-semibold text-primary">{result.arguments.length * 2}</span>
               </div>
-              <div className="h-3 bg-zinc-100 rounded-full overflow-hidden">
+              <div className="h-1.5 bg-black/[0.03] rounded-full overflow-hidden">
                 <div
-                  className="h-full bg-gradient-to-r from-rose-500 to-orange-500 rounded-full transition-all duration-1000"
-                  style={{ width: `${mockReportData.scores.negative}%` }}
+                  className="h-full bg-accent-red rounded-full transition-all duration-1000"
+                  style={{ width: `${Math.min(result.arguments.length * 25, 100)}%` }}
                 />
               </div>
             </CardContent>
@@ -93,62 +166,86 @@ export default function ReportPage() {
         </div>
 
         {/* Key Points */}
-        <div className="grid md:grid-cols-2 gap-6 mb-8">
+        <div className="grid md:grid-cols-2 gap-3 mb-6">
           <Card className="border-0">
-            <CardContent className="p-6">
-              <h3 className="font-semibold text-blue-700 mb-4 flex items-center gap-2">
-                <span className="w-8 h-8 rounded-lg bg-blue-100 flex items-center justify-center">🔵</span>
+            <CardContent className="p-5">
+              <h3 className="text-sm font-medium text-accent-blue mb-3 flex items-center gap-2">
+                <span className="w-5 h-5 rounded bg-accent-blue/10 flex items-center justify-center">
+                  <svg className="w-3 h-3 text-accent-blue" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                  </svg>
+                </span>
                 正方核心论点
               </h3>
-              <ul className="space-y-3">
-                {mockReportData.keyPoints.positive.map((point, i) => (
-                  <li key={i} className="flex items-start gap-3">
-                    <span className="w-6 h-6 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center text-xs font-medium shrink-0 mt-0.5">{i + 1}</span>
-                    <span className="text-zinc-700">{point}</span>
-                  </li>
-                ))}
-              </ul>
+              {positiveHighlights.length > 0 ? (
+                <ul className="space-y-2">
+                  {positiveHighlights.map((point, i) => (
+                    <li key={i} className="flex items-start gap-2">
+                      <span className="w-4 h-4 rounded-full bg-accent-blue/10 text-accent-blue flex items-center justify-center text-2xs font-medium shrink-0 mt-0.5">{i + 1}</span>
+                      <span className="text-sm text-secondary">{point}</span>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="text-sm text-secondary">后端未返回可提炼的正方要点。</p>
+              )}
             </CardContent>
           </Card>
 
           <Card className="border-0">
-            <CardContent className="p-6">
-              <h3 className="font-semibold text-rose-700 mb-4 flex items-center gap-2">
-                <span className="w-8 h-8 rounded-lg bg-rose-100 flex items-center justify-center">🔴</span>
+            <CardContent className="p-5">
+              <h3 className="text-sm font-medium text-accent-red mb-3 flex items-center gap-2">
+                <span className="w-5 h-5 rounded bg-accent-red/10 flex items-center justify-center">
+                  <svg className="w-3 h-3 text-accent-red" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </span>
                 反方核心论点
               </h3>
-              <ul className="space-y-3">
-                {mockReportData.keyPoints.negative.map((point, i) => (
-                  <li key={i} className="flex items-start gap-3">
-                    <span className="w-6 h-6 rounded-full bg-rose-100 text-rose-600 flex items-center justify-center text-xs font-medium shrink-0 mt-0.5">{i + 1}</span>
-                    <span className="text-zinc-700">{point}</span>
-                  </li>
-                ))}
-              </ul>
+              {negativeHighlights.length > 0 ? (
+                <ul className="space-y-2">
+                  {negativeHighlights.map((point, i) => (
+                    <li key={i} className="flex items-start gap-2">
+                      <span className="w-4 h-4 rounded-full bg-accent-red/10 text-accent-red flex items-center justify-center text-2xs font-medium shrink-0 mt-0.5">{i + 1}</span>
+                      <span className="text-sm text-secondary">{point}</span>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="text-sm text-secondary">后端未返回可提炼的反方要点。</p>
+              )}
             </CardContent>
           </Card>
         </div>
 
         {/* Analysis */}
-        <Card className="border-0 mb-8">
-          <CardContent className="p-6">
-            <h3 className="font-semibold text-zinc-900 mb-4 flex items-center gap-2">
-              <span className="w-8 h-8 rounded-lg bg-zinc-100 flex items-center justify-center">📝</span>
+        <Card className="border-0 mb-3">
+          <CardContent className="p-5">
+            <h3 className="text-sm font-medium text-primary mb-3 flex items-center gap-2">
+              <span className="w-5 h-5 rounded bg-black/[0.04] flex items-center justify-center">
+                <svg className="w-3 h-3 text-secondary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
+              </span>
               辩论分析
             </h3>
-            <p className="text-zinc-700 leading-relaxed">{mockReportData.analysis}</p>
+            <p className="text-sm text-secondary leading-relaxed whitespace-pre-wrap">{result.judgment}</p>
           </CardContent>
         </Card>
 
         {/* Recommendation */}
-        <Card className="border-0 overflow-hidden mb-12">
-          <div className="h-1.5 bg-gradient-to-r from-emerald-500 to-teal-500" />
-          <CardContent className="p-6">
-            <h3 className="font-semibold text-emerald-700 mb-4 flex items-center gap-2">
-              <span className="w-8 h-8 rounded-lg bg-emerald-100 flex items-center justify-center">💡</span>
+        <Card className="border-0 overflow-hidden mb-8">
+          <div className="h-0.5 bg-accent-green" />
+          <CardContent className="p-5">
+            <h3 className="text-sm font-medium text-accent-green mb-3 flex items-center gap-2">
+              <span className="w-5 h-5 rounded bg-accent-green/10 flex items-center justify-center">
+                <svg className="w-3 h-3 text-accent-green" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+                </svg>
+              </span>
               行动建议
             </h3>
-            <p className="text-zinc-700 leading-relaxed">{mockReportData.recommendation}</p>
+            <p className="text-sm text-secondary leading-relaxed whitespace-pre-wrap">{result.recommendation}</p>
           </CardContent>
         </Card>
 
@@ -158,15 +255,40 @@ export default function ReportPage() {
             variant="outline"
             size="lg"
             onClick={() => router.push('/')}
-            className="px-8"
           >
-            <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
             </svg>
             开始新辩论
           </Button>
         </div>
+          </>
+        ) : null}
       </div>
     </div>
+  )
+}
+
+function ReportPageFallback() {
+  return (
+    <div className="min-h-screen bg-surface-subtle px-6 py-12">
+      <div className="max-w-3xl mx-auto">
+        <Card className="border-0">
+          <CardContent className="p-8 text-center">
+            <div className="mx-auto mb-4 h-8 w-8 animate-spin rounded-full border-2 border-black/10 border-t-primary" />
+            <p className="text-primary font-medium mb-2">正在准备判决页面</p>
+            <p className="text-sm text-secondary">页面参数加载完成后会自动继续。</p>
+          </CardContent>
+        </Card>
+      </div>
+    </div>
+  )
+}
+
+export default function ReportPage() {
+  return (
+    <Suspense fallback={<ReportPageFallback />}>
+      <ReportPageContent />
+    </Suspense>
   )
 }

@@ -77,8 +77,9 @@ async def get_result(debate_id: str):
             status_code=400, detail="Debate not yet completed"
         )
 
-    # Run judgment to get result
-    result = debate_service.run_debate(debate_id)
+    result = debate_service.get_result(debate_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="Debate result not found")
     return result
 
 
