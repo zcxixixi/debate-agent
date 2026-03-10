@@ -25,6 +25,9 @@ import {
 } from '@/lib/debate-stream'
 import { cn } from '@/lib/utils'
 
+const SOCKET_IDLE_TIMEOUT_MS = 20_000
+const SOCKET_RECONNECT_DELAY_MS = 1_500
+
 function DebatePageContent() {
   const [streamState, setStreamState] = useState<DebateStreamState | null>(null)
   const [displayedDebate, setDisplayedDebate] = useState<DebateState | null>(null)
@@ -50,6 +53,10 @@ function DebatePageContent() {
     const currentDebateId = debateId
     let isCancelled = false
     let socket: WebSocket | null = null
+    let reconnectTimer: number | null = null
+    let idleTimer: number | null = null
+    let reconnectAttempt = 0
+    let latestState: DebateState | null = null
 
     async function syncFinalResult() {
       const [debateState, debateResult] = await Promise.all([
@@ -75,6 +82,178 @@ function DebatePageContent() {
       setLoading(false)
     }
 
+    function clearRecoveryTimers() {
+      if (reconnectTimer !== null) {
+        window.clearTimeout(reconnectTimer)
+        reconnectTimer = null
+      }
+      if (idleTimer !== null) {
+        window.clearTimeout(idleTimer)
+        idleTimer = null
+      }
+    }
+
+    function closeSocket() {
+      if (!socket) {
+        return
+      }
+
+      socket.close()
+      socket = null
+    }
+
+    async function syncLiveState() {
+      const nextState = await fetchDebate(currentDebateId)
+
+      if (isCancelled) {
+        return
+      }
+
+      latestState = nextState
+      setStreamState((previousState) => {
+        const baseState = previousState ?? createDebateStreamState(nextState)
+        return {
+          ...baseState,
+          debate: nextState,
+        }
+      })
+      setDisplayedDebate(nextState)
+
+      if (nextState.status === 'completed') {
+        completedRef.current = true
+        clearRecoveryTimers()
+        closeSocket()
+        await syncFinalResult()
+      }
+    }
+
+    function scheduleRecovery() {
+      if (isCancelled || completedRef.current || reconnectTimer !== null) {
+        return
+      }
+
+      reconnectAttempt += 1
+      reconnectTimer = window.setTimeout(() => {
+        reconnectTimer = null
+        if (isCancelled || completedRef.current) {
+          return
+        }
+
+        void syncLiveState()
+          .catch(() => {
+            // Ignore transient recovery failures and retry the socket path.
+          })
+          .finally(() => {
+            if (!isCancelled && !completedRef.current) {
+              openSocket()
+            }
+          })
+      }, SOCKET_RECONNECT_DELAY_MS * Math.min(reconnectAttempt, 4))
+    }
+
+    function resetIdleTimer() {
+      if (idleTimer !== null) {
+        window.clearTimeout(idleTimer)
+      }
+
+      idleTimer = window.setTimeout(() => {
+        if (isCancelled || completedRef.current) {
+          return
+        }
+
+        closeSocket()
+        scheduleRecovery()
+      }, SOCKET_IDLE_TIMEOUT_MS)
+    }
+
+    function openSocket() {
+      if (isCancelled || completedRef.current || socket) {
+        return
+      }
+
+      socket = new WebSocket(
+        buildDebateWebSocketUrl(resolveApiBaseUrl(), currentDebateId)
+      )
+
+      socket.addEventListener('open', () => {
+        if (isCancelled) {
+          return
+        }
+
+        reconnectAttempt = 0
+        setLoading(false)
+        resetIdleTimer()
+      })
+
+      socket.addEventListener('message', (messageEvent) => {
+        if (isCancelled) {
+          return
+        }
+
+        resetIdleTimer()
+
+        const payload = JSON.parse(messageEvent.data) as {
+          type?: string
+          message?: string
+          round?: number
+        }
+
+        if (typeof payload.type !== 'string') {
+          return
+        }
+
+        const streamEvent = payload as DebateStreamEvent
+        if (payload.type === 'error') {
+          closeSocket()
+          scheduleRecovery()
+          return
+        }
+
+        if (payload.type === 'cached_result' || payload.type === 'completed') {
+          completedRef.current = true
+          clearRecoveryTimers()
+          void syncFinalResult().catch((err) => {
+            if (!isCancelled) {
+              setError(
+                err instanceof Error
+                  ? err.message
+                  : '同步最终辩论结果失败，请稍后重试。'
+              )
+              setLoading(false)
+            }
+          })
+          closeSocket()
+          return
+        }
+
+        setStreamState((previousState) => {
+          const baseLiveState = latestState ?? previousState?.debate
+          if (!baseLiveState) {
+            return previousState
+          }
+
+          return applyDebateStreamEvent(
+            previousState ?? createDebateStreamState(baseLiveState),
+            streamEvent
+          )
+        })
+      })
+
+      socket.addEventListener('error', () => {
+        if (!isCancelled && !completedRef.current) {
+          closeSocket()
+          scheduleRecovery()
+        }
+      })
+
+      socket.addEventListener('close', () => {
+        socket = null
+        if (!isCancelled && !completedRef.current) {
+          scheduleRecovery()
+        }
+      })
+    }
+
     async function loadDebate() {
       try {
         setLoading(true)
@@ -87,6 +266,7 @@ function DebatePageContent() {
           return
         }
 
+        latestState = state
         setStreamState(createDebateStreamState(state))
         setDisplayedDebate(state)
         setSelectedRoundIndex(null)
@@ -96,68 +276,7 @@ function DebatePageContent() {
           return
         }
 
-        socket = new WebSocket(
-          buildDebateWebSocketUrl(resolveApiBaseUrl(), currentDebateId)
-        )
-
-        socket.addEventListener('open', () => {
-          if (!isCancelled) {
-            setLoading(false)
-          }
-        })
-
-        socket.addEventListener('message', (messageEvent) => {
-          if (isCancelled) {
-            return
-          }
-
-          const payload = JSON.parse(messageEvent.data) as {
-            type?: string
-            message?: string
-            round?: number
-          }
-
-          if (typeof payload.type !== 'string') {
-            return
-          }
-
-          const streamEvent = payload as DebateStreamEvent
-          if (payload.type === 'error') {
-            setError(payload.message ?? '实时辩论连接失败，请稍后重试。')
-            setLoading(false)
-            socket?.close()
-            return
-          }
-
-          if (payload.type === 'cached_result' || payload.type === 'completed') {
-            void syncFinalResult().catch((err) => {
-              if (!isCancelled) {
-                setError(
-                  err instanceof Error
-                    ? err.message
-                    : '同步最终辩论结果失败，请稍后重试。'
-                )
-                setLoading(false)
-              }
-            })
-            socket?.close()
-            return
-          }
-
-          setStreamState((previousState) =>
-            applyDebateStreamEvent(
-              previousState ?? createDebateStreamState(state),
-              streamEvent
-            )
-          )
-        })
-
-        socket.addEventListener('error', () => {
-          if (!isCancelled && !completedRef.current) {
-            setError('实时辩论连接中断，请刷新后重试。')
-            setLoading(false)
-          }
-        })
+        openSocket()
       } catch (err) {
         setError(err instanceof Error ? err.message : '加载辩论失败，请稍后重试。')
       } finally {
@@ -171,7 +290,8 @@ function DebatePageContent() {
 
     return () => {
       isCancelled = true
-      socket?.close()
+      clearRecoveryTimers()
+      closeSocket()
     }
   }, [debateId])
 
@@ -215,12 +335,7 @@ function DebatePageContent() {
       ? getPreferredRoundIndex(renderedDebate)
       : 0
   const liveRound = renderedDebate?.arguments[liveRoundIndex]
-  const autoScrollToken =
-    selectedRoundIndex === null && liveRound
-      ? `${liveRound.round}:${Math.floor(
-          (liveRound.positive.length + liveRound.negative.length) / 120
-        )}`
-      : null
+  const autoScrollRound = selectedRoundIndex === null ? liveRound?.round ?? null : null
   const activeRoundIndex =
     selectedRoundIndex ??
     (result
@@ -235,20 +350,19 @@ function DebatePageContent() {
   const currentRound = rounds[safeActiveRoundIndex]
 
   useEffect(() => {
-    if (selectedRoundIndex !== null || !autoScrollToken || result) {
+    if (selectedRoundIndex !== null || autoScrollRound === null || result) {
       return
     }
 
     const scrollTimer = window.setTimeout(() => {
-      const scrollTarget = liveHistoryRoundRef.current ?? activeRoundRef.current
-      scrollTarget?.scrollIntoView({
+      activeRoundRef.current?.scrollIntoView({
         behavior: 'smooth',
-        block: 'nearest',
+        block: 'start',
       })
     }, 120)
 
     return () => window.clearTimeout(scrollTimer)
-  }, [autoScrollToken, result, selectedRoundIndex])
+  }, [autoScrollRound, result, selectedRoundIndex])
 
   return (
     <div className="min-h-screen bg-surface-subtle px-6 py-12">
