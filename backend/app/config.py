@@ -22,7 +22,11 @@ class Settings(BaseSettings):
     app_name: str = Field(default="Debate Agent", alias="APP_NAME")
     debug: bool = Field(default=False, alias="DEBUG")
     cors_origins: str = Field(
-        default="http://localhost:3000,http://127.0.0.1:3000",
+        default=(
+            "http://localhost:3000,"
+            "http://127.0.0.1:3000,"
+            "https://debate-agent.vercel.app"
+        ),
         alias="CORS_ORIGINS",
     )
     database_path: str = Field(default="", alias="DATABASE_PATH")

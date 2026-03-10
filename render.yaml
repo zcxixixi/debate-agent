@@ -18,6 +18,6 @@ services:
       - key: MEM0_API_KEY
         sync: false
       - key: CORS_ORIGINS
-        sync: false
+        value: http://localhost:3000,http://127.0.0.1:3000,https://debate-agent.vercel.app
       - key: DATABASE_PATH
         value: /tmp/debates.db
