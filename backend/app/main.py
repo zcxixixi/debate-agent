@@ -4,7 +4,7 @@ from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from app.api import router as debate_router
 from app.api.routes import debate_service
-from app.api.websocket import manager, stream_debate
+from app.api.websocket import manager, safe_send_json, stream_debate
 from app.config import get_settings
 
 settings = get_settings()
@@ -35,7 +35,10 @@ async def websocket_debate(websocket: WebSocket, debate_id: str):
     try:
         await stream_debate(websocket, debate_id, debate_service)
     except Exception as e:
-        await websocket.send_json({"error": str(e)})
+        try:
+            await safe_send_json(websocket, {"error": str(e)})
+        except Exception:
+            pass
     finally:
         manager.disconnect(websocket, debate_id)
 

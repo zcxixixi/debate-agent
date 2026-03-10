@@ -1,9 +1,9 @@
 """WebSocket support for real-time debate updates with true streaming."""
 
 from fastapi import WebSocket, WebSocketDisconnect
-from typing import Optional
 import asyncio
 
+from app.config import get_settings
 from app.services import DebateService
 from app.schemas import DebateStatus, ArgumentRound
 
@@ -39,6 +39,32 @@ class ConnectionManager:
 manager = ConnectionManager()
 
 
+async def safe_send_json(websocket: WebSocket, payload: dict):
+    """Send a websocket payload and normalize closed-connection errors."""
+    try:
+        await websocket.send_json(payload)
+    except RuntimeError as exc:
+        if 'close message has been sent' in str(exc):
+            raise WebSocketDisconnect() from exc
+        raise
+
+
+def get_llm_timeout_seconds() -> float:
+    """Return a sane timeout budget for a single model step."""
+    return max(get_settings().llm_timeout_seconds, 0.01)
+
+
+async def run_with_timeout(awaitable, error_message: str):
+    """Fail fast instead of leaving the websocket stream hanging forever."""
+    try:
+        return await asyncio.wait_for(
+            awaitable,
+            timeout=get_llm_timeout_seconds(),
+        )
+    except TimeoutError as exc:
+        raise TimeoutError(error_message) from exc
+
+
 async def stream_debate(
     websocket: WebSocket,
     debate_id: str,
@@ -47,14 +73,14 @@ async def stream_debate(
     """Stream debate rounds in real-time via WebSocket with true streaming."""
     state = debate_service.get_debate(debate_id)
     if not state:
-        await websocket.send_json({"type": "error", "message": "Debate not found"})
+        await safe_send_json(websocket, {"type": "error", "message": "Debate not found"})
         return
 
     # Check if already completed
     existing_result = debate_service.get_result(debate_id)
     if state.status == DebateStatus.COMPLETED and existing_result:
         # Send existing result
-        await websocket.send_json({
+        await safe_send_json(websocket, {
             "type": "cached_result",
             "winner": existing_result.winner.value,
             "judgment": existing_result.judgment,
@@ -65,7 +91,7 @@ async def stream_debate(
     state.status = DebateStatus.IN_PROGRESS
 
     # Send initial status
-    await websocket.send_json({
+    await safe_send_json(websocket, {
         "type": "status",
         "debate_id": debate_id,
         "status": "in_progress",
@@ -89,20 +115,23 @@ async def stream_debate(
         nonlocal moderator_intro
 
         try:
-            moderator_intro = await asyncio.to_thread(
-                debate_service.moderator_agent.analyze_topic,
-                state.topic,
-                state.context,
+            moderator_intro = await run_with_timeout(
+                asyncio.to_thread(
+                    debate_service.moderator_agent.analyze_topic,
+                    state.topic,
+                    state.context,
+                ),
+                "主持人导语生成超时，请重试。",
             )
         except Exception:
             moderator_intro = f"辩论开始：{state.topic}"
 
         try:
-            await websocket.send_json({
+            await safe_send_json(websocket, {
                 "type": "moderator",
                 "content": moderator_intro,
             })
-        except Exception:
+        except (Exception, WebSocketDisconnect):
             pass
 
     moderator_task = asyncio.create_task(send_moderator_intro())
@@ -120,7 +149,7 @@ async def stream_debate(
         for round_num in range(start_round, state.total_rounds + 1):
             state.current_round = round_num
 
-            await websocket.send_json({
+            await safe_send_json(websocket, {
                 "type": "round_start",
                 "round": round_num,
             })
@@ -131,29 +160,32 @@ async def stream_debate(
                 enhanced_context = f"{enhanced_context}\n\n历史背景：{user_context}"
 
             # Positive agent argues with streaming
-            await websocket.send_json({
+            await safe_send_json(websocket, {
                 "type": "thinking",
                 "agent": "positive",
                 "message": "正方思考中...",
             })
 
             async def positive_callback(chunk: str):
-                await websocket.send_json({
+                await safe_send_json(websocket, {
                     "type": "stream",
                     "agent": "positive",
                     "chunk": chunk,
                 })
 
-            positive_arg = await debate_service.positive_agent.argue_async(
-                topic=state.topic,
-                context=enhanced_context,
-                opponent_last_point=negative_last_point,
-                my_previous_points=state.positive_points,
-                stream_callback=positive_callback,
+            positive_arg = await run_with_timeout(
+                debate_service.positive_agent.argue_async(
+                    topic=state.topic,
+                    context=enhanced_context,
+                    opponent_last_point=negative_last_point,
+                    my_previous_points=state.positive_points,
+                    stream_callback=positive_callback,
+                ),
+                "正方输出超时，请重试。",
             )
             positive_last_point = positive_arg
 
-            await websocket.send_json({
+            await safe_send_json(websocket, {
                 "type": "argument_complete",
                 "round": round_num,
                 "agent": "positive",
@@ -161,29 +193,32 @@ async def stream_debate(
             })
 
             # Negative agent argues with streaming
-            await websocket.send_json({
+            await safe_send_json(websocket, {
                 "type": "thinking",
                 "agent": "negative",
                 "message": "反方思考中...",
             })
 
             async def negative_callback(chunk: str):
-                await websocket.send_json({
+                await safe_send_json(websocket, {
                     "type": "stream",
                     "agent": "negative",
                     "chunk": chunk,
                 })
 
-            negative_arg = await debate_service.negative_agent.argue_async(
-                topic=state.topic,
-                context=enhanced_context,
-                opponent_last_point=positive_last_point,
-                my_previous_points=state.negative_points,
-                stream_callback=negative_callback,
+            negative_arg = await run_with_timeout(
+                debate_service.negative_agent.argue_async(
+                    topic=state.topic,
+                    context=enhanced_context,
+                    opponent_last_point=positive_last_point,
+                    my_previous_points=state.negative_points,
+                    stream_callback=negative_callback,
+                ),
+                "反方输出超时，请重试。",
             )
             negative_last_point = negative_arg
 
-            await websocket.send_json({
+            await safe_send_json(websocket, {
                 "type": "argument_complete",
                 "round": round_num,
                 "agent": "negative",
@@ -207,17 +242,20 @@ async def stream_debate(
             await moderator_task
 
         # Get judgment
-        await websocket.send_json({
+        await safe_send_json(websocket, {
             "type": "thinking",
             "agent": "judgment",
             "message": "裁判评估中...",
         })
 
-        judgment = await asyncio.to_thread(
-            debate_service.judgment_agent.judge,
-            topic=state.topic,
-            context=state.context,
-            arguments=[arg.model_dump() for arg in state.arguments],
+        judgment = await run_with_timeout(
+            asyncio.to_thread(
+                debate_service.judgment_agent.judge,
+                topic=state.topic,
+                context=state.context,
+                arguments=[arg.model_dump() for arg in state.arguments],
+            ),
+            "裁判评估超时，请重试。",
         )
 
         judgment_result = debate_service.judgment_agent.parse_judgment(judgment)
@@ -226,7 +264,7 @@ async def stream_debate(
         debate_service._save_debate(state)
 
         # Send final result
-        await websocket.send_json({
+        await safe_send_json(websocket, {
             "type": "judgment",
             "winner": judgment_result.winner,
             "positive_score": judgment_result.positive_scores.total,
@@ -259,7 +297,7 @@ async def stream_debate(
             except Exception:
                 pass
 
-        await websocket.send_json({
+        await safe_send_json(websocket, {
             "type": "completed",
             "debate_id": debate_id,
         })
@@ -270,8 +308,11 @@ async def stream_debate(
         debate_service._save_debate(state)
     except Exception as e:
         moderator_task.cancel()
-        await websocket.send_json({
-            "type": "error",
-            "message": str(e),
-        })
+        try:
+            await safe_send_json(websocket, {
+                "type": "error",
+                "message": str(e),
+            })
+        except WebSocketDisconnect:
+            pass
         debate_service._save_debate(state)

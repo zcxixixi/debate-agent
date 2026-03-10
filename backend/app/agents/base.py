@@ -1,5 +1,7 @@
 from abc import ABC, abstractmethod
 from typing import Optional, AsyncGenerator
+
+from fastapi import WebSocketDisconnect
 from openai import OpenAI, AsyncOpenAI
 
 
@@ -127,6 +129,16 @@ class BaseDebateAgent(ABC):
                     if stream_callback:
                         await stream_callback(content)
 
+        except WebSocketDisconnect:
+            raise
+        except RuntimeError as e:
+            if 'close message has been sent' in str(e):
+                raise WebSocketDisconnect() from e
+
+            error_msg = f"[生成错误: {str(e)[:100]}]"
+            full_response = error_msg
+            if stream_callback:
+                await stream_callback(error_msg)
         except Exception as e:
             error_msg = f"[生成错误: {str(e)[:100]}]"
             full_response = error_msg

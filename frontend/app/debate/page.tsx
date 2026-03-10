@@ -25,7 +25,6 @@ import {
 } from '@/lib/debate-stream'
 import { cn } from '@/lib/utils'
 
-const SOCKET_IDLE_TIMEOUT_MS = 20_000
 const SOCKET_RECONNECT_DELAY_MS = 1_500
 
 function DebatePageContent() {
@@ -54,7 +53,6 @@ function DebatePageContent() {
     let isCancelled = false
     let socket: WebSocket | null = null
     let reconnectTimer: number | null = null
-    let idleTimer: number | null = null
     let reconnectAttempt = 0
     let latestState: DebateState | null = null
 
@@ -86,10 +84,6 @@ function DebatePageContent() {
       if (reconnectTimer !== null) {
         window.clearTimeout(reconnectTimer)
         reconnectTimer = null
-      }
-      if (idleTimer !== null) {
-        window.clearTimeout(idleTimer)
-        idleTimer = null
       }
     }
 
@@ -151,21 +145,6 @@ function DebatePageContent() {
       }, SOCKET_RECONNECT_DELAY_MS * Math.min(reconnectAttempt, 4))
     }
 
-    function resetIdleTimer() {
-      if (idleTimer !== null) {
-        window.clearTimeout(idleTimer)
-      }
-
-      idleTimer = window.setTimeout(() => {
-        if (isCancelled || completedRef.current) {
-          return
-        }
-
-        closeSocket()
-        scheduleRecovery()
-      }, SOCKET_IDLE_TIMEOUT_MS)
-    }
-
     function openSocket() {
       if (isCancelled || completedRef.current || socket) {
         return
@@ -182,15 +161,12 @@ function DebatePageContent() {
 
         reconnectAttempt = 0
         setLoading(false)
-        resetIdleTimer()
       })
 
       socket.addEventListener('message', (messageEvent) => {
         if (isCancelled) {
           return
         }
-
-        resetIdleTimer()
 
         const payload = JSON.parse(messageEvent.data) as {
           type?: string
@@ -204,8 +180,11 @@ function DebatePageContent() {
 
         const streamEvent = payload as DebateStreamEvent
         if (payload.type === 'error') {
+          completedRef.current = true
+          clearRecoveryTimers()
+          setError(payload.message ?? '辩论中断，请稍后重试。')
+          setLoading(false)
           closeSocket()
-          scheduleRecovery()
           return
         }
 

@@ -30,6 +30,10 @@ class Settings(BaseSettings):
         alias="CORS_ORIGINS",
     )
     database_path: str = Field(default="", alias="DATABASE_PATH")
+    llm_timeout_seconds: float = Field(
+        default=45.0,
+        alias="LLM_TIMEOUT_SECONDS",
+    )
 
     model_config = SettingsConfigDict(
         env_file=".env",

@@ -90,6 +90,12 @@ class FakeDebateService:
         return f"第{round_num}轮总结"
 
 
+class HangingPositiveAgent:
+    async def argue_async(self, **kwargs):
+        await asyncio.sleep(0.05)
+        return "不会返回"
+
+
 class WebsocketStreamTests(TestCase):
     def test_round_starts_before_moderator_intro_finishes(self):
         websocket = FakeWebSocket()
@@ -119,3 +125,17 @@ class WebsocketStreamTests(TestCase):
                 message = websocket.receive_json()
 
         self.assertTrue(message["shared_service"])
+
+    def test_stream_emits_error_when_agent_generation_times_out(self):
+        websocket = FakeWebSocket()
+        debate_service = FakeDebateService()
+        debate_service.positive_agent = HangingPositiveAgent()
+
+        with patch(
+            "app.api.websocket.get_settings",
+            return_value=SimpleNamespace(llm_timeout_seconds=0.01),
+        ):
+            asyncio.run(stream_debate(websocket, "debate-1", debate_service))
+
+        self.assertEqual(websocket.messages[-1]["type"], "error")
+        self.assertIn("正方输出超时", websocket.messages[-1]["message"])
