@@ -69,6 +69,7 @@ class DebateService:
 
     def __init__(self):
         settings = get_settings()
+        request_timeout_seconds = max(settings.llm_timeout_seconds - 5.0, 5.0)
         self.db_path = (
             Path(settings.database_path).expanduser()
             if settings.database_path
@@ -83,21 +84,29 @@ class DebateService:
             api_key=settings.glm_api_key,
             base_url=settings.glm_base_url,
             model=settings.glm_model,
+            backup_model=settings.glm_backup_model,
+            request_timeout_seconds=request_timeout_seconds,
         )
         self.negative_agent = NegativeAgent(
             api_key=settings.glm_api_key,
             base_url=settings.glm_base_url,
             model=settings.glm_model,
+            backup_model=settings.glm_backup_model,
+            request_timeout_seconds=request_timeout_seconds,
         )
         self.judgment_agent = JudgmentAgent(
             api_key=settings.glm_api_key,
             base_url=settings.glm_base_url,
             model=settings.glm_model,
+            backup_model=settings.glm_backup_model,
+            request_timeout_seconds=request_timeout_seconds,
         )
         self.moderator_agent = ModeratorAgent(
             api_key=settings.glm_api_key,
             base_url=settings.glm_base_url,
             model=settings.glm_model,
+            backup_model=settings.glm_backup_model,
+            request_timeout_seconds=request_timeout_seconds,
         )
 
         # Initialize memory service

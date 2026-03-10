@@ -14,6 +14,7 @@ class Settings(BaseSettings):
         alias="GLM_BASE_URL",
     )
     glm_model: str = Field(default="glm-5", alias="GLM_MODEL")
+    glm_backup_model: str = Field(default="", alias="GLM_BACKUP_MODEL")
 
     # Mem0 Configuration
     mem0_api_key: str = Field(default="", alias="MEM0_API_KEY")

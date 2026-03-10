@@ -15,8 +15,12 @@ services:
         value: http://www.zettacore.cyou/v1
       - key: GLM_MODEL
         value: glm-5
+      - key: GLM_BACKUP_MODEL
+        value: glm-4.7
       - key: MEM0_API_KEY
         sync: false
+      - key: LLM_TIMEOUT_SECONDS
+        value: 90
       - key: CORS_ORIGINS
         value: http://localhost:3000,http://127.0.0.1:3000,https://debate-agent.vercel.app
       - key: DATABASE_PATH

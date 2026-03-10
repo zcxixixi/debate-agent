@@ -21,13 +21,22 @@ MODERATOR_SYSTEM_PROMPT = """你是一位辩论主持人，负责组织和引导
 class ModeratorAgent(BaseDebateAgent):
     """Agent that moderates the debate."""
 
-    def __init__(self, api_key: str, base_url: str, model: str):
+    def __init__(
+        self,
+        api_key: str,
+        base_url: str,
+        model: str,
+        backup_model: Optional[str] = None,
+        request_timeout_seconds: Optional[float] = None,
+    ):
         super().__init__(
             api_key=api_key,
             base_url=base_url,
             model=model,
+            backup_model=backup_model,
             role_name="主持人",
             system_prompt=MODERATOR_SYSTEM_PROMPT,
+            request_timeout_seconds=request_timeout_seconds,
         )
 
     def argue(
