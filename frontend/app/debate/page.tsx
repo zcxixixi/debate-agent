@@ -4,20 +4,31 @@ import { Suspense, useEffect, useRef, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { DebateResult, DebateState, fetchDebate, runDebate } from '@/lib/api'
+import { DebateResult, fetchDebate, fetchResult, resolveApiBaseUrl } from '@/lib/api'
+import {
+  applyDebateStreamEvent,
+  buildDebateWebSocketUrl,
+  createDebateStreamState,
+  type DebateStreamEvent,
+  type DebateStreamState,
+} from '@/lib/debate-stream'
 import { cn } from '@/lib/utils'
 
 function DebatePageContent() {
-  const [debate, setDebate] = useState<DebateState | null>(null)
+  const [streamState, setStreamState] = useState<DebateStreamState | null>(null)
   const [result, setResult] = useState<DebateResult | null>(null)
   const [activeRound, setActiveRound] = useState(0)
   const [isAnimating, setIsAnimating] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const hasStartedRun = useRef(false)
+  const completedRef = useRef(false)
   const router = useRouter()
   const searchParams = useSearchParams()
   const debateId = searchParams.get('id')
+  const debate = streamState?.debate ?? null
+  const thinking = streamState?.thinking ?? null
+  const moderatorIntro = result?.summary ?? streamState?.moderatorIntro ?? null
 
   useEffect(() => {
     if (!debateId || hasStartedRun.current) {
@@ -26,25 +37,134 @@ function DebatePageContent() {
 
     hasStartedRun.current = true
     const currentDebateId = debateId
+    let isCancelled = false
+    let socket: WebSocket | null = null
+
+    async function syncFinalResult() {
+      const [debateState, debateResult] = await Promise.all([
+        fetchDebate(currentDebateId),
+        fetchResult(currentDebateId),
+      ])
+
+      if (isCancelled) {
+        return
+      }
+
+      completedRef.current = true
+      setStreamState((previousState) => ({
+        ...createDebateStreamState(debateState),
+        moderatorIntro:
+          debateResult.summary ??
+          previousState?.moderatorIntro ??
+          null,
+      }))
+      setResult(debateResult)
+      setActiveRound(Math.max(debateResult.arguments.length - 1, 0))
+      setLoading(false)
+    }
 
     async function loadDebate() {
       try {
         setLoading(true)
         setError(null)
+        completedRef.current = false
 
         const state = await fetchDebate(currentDebateId)
-        setDebate(state)
 
-        const debateResult = await runDebate(currentDebateId)
-        setResult(debateResult)
+        if (isCancelled) {
+          return
+        }
+
+        setStreamState(createDebateStreamState(state))
+        setActiveRound(Math.max(state.arguments.length - 1, 0))
+
+        if (state.status === 'completed') {
+          await syncFinalResult()
+          return
+        }
+
+        socket = new WebSocket(
+          buildDebateWebSocketUrl(resolveApiBaseUrl(), currentDebateId)
+        )
+
+        socket.addEventListener('open', () => {
+          if (!isCancelled) {
+            setLoading(false)
+          }
+        })
+
+        socket.addEventListener('message', (messageEvent) => {
+          if (isCancelled) {
+            return
+          }
+
+          const payload = JSON.parse(messageEvent.data) as {
+            type?: string
+            message?: string
+            round?: number
+          }
+
+          if (typeof payload.type !== 'string') {
+            return
+          }
+
+          const streamEvent = payload as DebateStreamEvent
+
+          if (payload.type === 'error') {
+            setError(payload.message ?? '实时辩论连接失败，请稍后重试。')
+            setLoading(false)
+            socket?.close()
+            return
+          }
+
+          if (payload.type === 'cached_result' || payload.type === 'completed') {
+            void syncFinalResult().catch((err) => {
+              if (!isCancelled) {
+                setError(
+                  err instanceof Error
+                    ? err.message
+                    : '同步最终辩论结果失败，请稍后重试。'
+                )
+                setLoading(false)
+              }
+            })
+            socket?.close()
+            return
+          }
+
+          setStreamState((previousState) =>
+            applyDebateStreamEvent(
+              previousState ?? createDebateStreamState(state),
+              streamEvent
+            )
+          )
+
+          if (typeof payload.round === 'number') {
+            setActiveRound(Math.max(payload.round - 1, 0))
+          }
+        })
+
+        socket.addEventListener('error', () => {
+          if (!isCancelled && !completedRef.current) {
+            setError('实时辩论连接中断，请刷新后重试。')
+            setLoading(false)
+          }
+        })
       } catch (err) {
         setError(err instanceof Error ? err.message : '加载辩论失败，请稍后重试。')
       } finally {
-        setLoading(false)
+        if (!socket) {
+          setLoading(false)
+        }
       }
     }
 
     void loadDebate()
+
+    return () => {
+      isCancelled = true
+      socket?.close()
+    }
   }, [debateId])
 
   useEffect(() => {
@@ -66,6 +186,9 @@ function DebatePageContent() {
   const rounds = result?.arguments ?? debate?.arguments ?? []
   const currentRound = rounds[activeRound]
   const topic = result?.topic ?? debate?.topic ?? '正在加载辩题'
+  const completedRounds = (debate?.arguments ?? []).filter(
+    (round) => round.positive && round.negative
+  ).length
 
   return (
     <div className="min-h-screen bg-surface-subtle px-6 py-12">
@@ -110,15 +233,46 @@ function DebatePageContent() {
           <Card className="border-0 mb-6">
             <CardContent className="p-8 text-center">
               <div className="mx-auto mb-4 h-8 w-8 animate-spin rounded-full border-2 border-black/10 border-t-primary" />
-              <p className="text-primary font-medium mb-2">正在生成完整辩论</p>
+              <p className="text-primary font-medium mb-2">正在建立实时辩论连接</p>
               <p className="text-sm text-secondary">
-                后端正在调用模型完成多轮分析，完成后会自动展示结果。
+                页面会按模型生成顺序实时显示每一轮论点，而不是等全部完成后一次返回。
               </p>
             </CardContent>
           </Card>
         ) : null}
 
-        {!error && !loading && rounds.length > 0 ? (
+        {!error && !loading && !result ? (
+          <Card className="border-0 mb-6">
+            <CardContent className="p-6">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-medium text-primary">
+                    {thinking?.message ?? '已连接实时辩论通道，等待模型输出。'}
+                  </p>
+                  <p className="text-xs text-secondary mt-1">
+                    {thinking?.agent === 'positive'
+                      ? '当前为正方输出'
+                      : thinking?.agent === 'negative'
+                        ? '当前为反方输出'
+                        : thinking?.agent === 'judgment'
+                          ? '当前为裁判评估'
+                          : '每个新 chunk 会直接写入下面的辩论卡片。'}
+                  </p>
+                </div>
+                <div className="text-xs text-tertiary">
+                  已完成 {completedRounds} / {debate?.total_rounds ?? 0} 轮
+                </div>
+              </div>
+              {moderatorIntro ? (
+                <p className="mt-4 text-sm text-secondary leading-relaxed whitespace-pre-wrap">
+                  {moderatorIntro}
+                </p>
+              ) : null}
+            </CardContent>
+          </Card>
+        ) : null}
+
+        {!error && rounds.length > 0 ? (
           <>
             {/* Round Indicators */}
             <div className="flex justify-center gap-2 mb-8">
@@ -157,12 +311,12 @@ function DebatePageContent() {
                       </div>
                     </div>
                   </CardHeader>
-                  <CardContent className="pt-0">
-                    <p className="text-sm text-secondary leading-relaxed">
-                      {currentRound.positive}
-                    </p>
-                  </CardContent>
-                </Card>
+                    <CardContent className="pt-0">
+                      <p className="text-sm text-secondary leading-relaxed">
+                      {currentRound.positive || '正方正在生成本轮观点...'}
+                      </p>
+                    </CardContent>
+                  </Card>
 
                 <Card className="border-0 overflow-hidden">
                   <div className="h-0.5 bg-accent-red" />
@@ -179,12 +333,12 @@ function DebatePageContent() {
                       </div>
                     </div>
                   </CardHeader>
-                  <CardContent className="pt-0">
-                    <p className="text-sm text-secondary leading-relaxed">
-                      {currentRound.negative}
-                    </p>
-                  </CardContent>
-                </Card>
+                    <CardContent className="pt-0">
+                      <p className="text-sm text-secondary leading-relaxed">
+                      {currentRound.negative || '反方正在生成本轮观点...'}
+                      </p>
+                    </CardContent>
+                  </Card>
               </div>
             ) : null}
 
@@ -213,11 +367,19 @@ function DebatePageContent() {
                       <div className="grid md:grid-cols-2 gap-3 text-xs text-secondary">
                         <div className="flex items-start gap-2">
                           <span className="text-accent-blue font-medium shrink-0">正方</span>
-                          <span className="line-clamp-1">{round.positive.slice(0, 40)}...</span>
+                          <span className="line-clamp-1">
+                            {round.positive
+                              ? `${round.positive.slice(0, 40)}...`
+                              : '生成中...'}
+                          </span>
                         </div>
                         <div className="flex items-start gap-2">
                           <span className="text-accent-red font-medium shrink-0">反方</span>
-                          <span className="line-clamp-1">{round.negative.slice(0, 40)}...</span>
+                          <span className="line-clamp-1">
+                            {round.negative
+                              ? `${round.negative.slice(0, 40)}...`
+                              : '生成中...'}
+                          </span>
                         </div>
                       </div>
                     </CardContent>
@@ -228,16 +390,22 @@ function DebatePageContent() {
 
             {/* CTA */}
             <div className="mt-10 text-center">
-              <Button
-                variant="default"
-                size="lg"
-                onClick={() => router.push(`/report?id=${encodeURIComponent(debateId ?? '')}`)}
-              >
-                查看最终判决
-                <svg className="w-4 h-4 ml-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                </svg>
-              </Button>
+              {result ? (
+                <Button
+                  variant="default"
+                  size="lg"
+                  onClick={() => router.push(`/report?id=${encodeURIComponent(debateId ?? '')}`)}
+                >
+                  查看最终判决
+                  <svg className="w-4 h-4 ml-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                  </svg>
+                </Button>
+              ) : (
+                <p className="text-sm text-secondary">
+                  裁判结论生成后，这里会解锁最终判决页入口。
+                </p>
+              )}
             </div>
           </>
         ) : null}
