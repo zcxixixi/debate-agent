@@ -30,12 +30,16 @@ POSITIVE_SYSTEM_PROMPT = """你是一位坚定的**功利主义者（Utilitarian
 
 **第三步：升维立论（输出这部分）**
 按照以下结构输出：
-```
-【破】{直接击碎对方核心论点的一句话，语气要犀利}
+```markdown
+### 破
+{直接击碎对方核心论点的一句话，语气要犀利}
 
-【立】{提出比上一轮更深层的论点，从功利主义价值观出发}
+### 立
+{提出比上一轮更深层的论点，从功利主义价值观出发}
 
-【据】{提供具体的数据、案例或逻辑推演作为支撑}
+### 据
+- {提供具体的数据、案例或逻辑推演作为支撑}
+- {必要时补充第二条更具体的证据}
 ```
 
 ## 回答要求
@@ -84,20 +88,79 @@ class PositiveAgent(BaseDebateAgent):
 
 1. 先在心中用"钢铁侠法"重构对方观点——假设对方的论点是最完美无缺的版本
 2. 找出即使是"钢铁侠版"也无法防御的致命漏洞
-3. 输出你的反驳和新论点，格式：
-   【破】...
-   【立】...
-   【据】...
+3. 用 Markdown 输出你的反驳和新论点，格式：
+   ### 破
+   ...
+   ### 立
+   ...
+   ### 据
+   - ...
 """)
         else:
             prompt_parts.append("""
 \n这是第一轮发言，请提出你的开篇立论。
 
-输出格式：
-   【立】{从功利主义角度提出核心论点}
-   【据】{数据、案例或逻辑支撑}
+请用 Markdown 输出，格式：
+   ### 立
+   {从功利主义角度提出核心论点}
+   ### 据
+   - {数据、案例或逻辑支撑}
 """)
 
         response = self.generate_response("\n".join(prompt_parts))
+        self.add_to_history("assistant", response)
+        return response
+
+    async def argue_async(
+        self,
+        topic: str,
+        context: Optional[str] = None,
+        previous_arguments: Optional[list[dict]] = None,
+        opponent_last_point: Optional[str] = None,
+        my_previous_points: Optional[list[str]] = None,
+        stream_callback: Optional[callable] = None,
+    ) -> str:
+        """Generate a supporting argument with streaming support (async version)."""
+        prompt_parts = [f"辩论话题：{topic}"]
+
+        if context:
+            prompt_parts.append(f"\n背景信息：{context}")
+
+        if my_previous_points and len(my_previous_points) > 0:
+            prompt_parts.append("\n【我之前的论点（禁止重复）】")
+            for i, point in enumerate(my_previous_points, 1):
+                prompt_parts.append(f"{i}. {point[:100]}...")
+            prompt_parts.append("\n⚠️ 你必须提出全新的论点，禁止换汤不换药！")
+
+        if opponent_last_point:
+            prompt_parts.append(f"\n【对方上一轮发言】\n{opponent_last_point}")
+            prompt_parts.append("""
+\n现在请按照以下流程思考并输出：
+
+1. 先在心中用"钢铁侠法"重构对方观点——假设对方的论点是最完美无缺的版本
+2. 找出即使是"钢铁侠版"也无法防御的致命漏洞
+3. 用 Markdown 输出你的反驳和新论点，格式：
+   ### 破
+   ...
+   ### 立
+   ...
+   ### 据
+   - ...
+""")
+        else:
+            prompt_parts.append("""
+\n这是第一轮发言，请提出你的开篇立论。
+
+请用 Markdown 输出，格式：
+   ### 立
+   {从功利主义角度提出核心论点}
+   ### 据
+   - {数据、案例或逻辑支撑}
+""")
+
+        response = await self.generate_response_async(
+            "\n".join(prompt_parts),
+            stream_callback=stream_callback,
+        )
         self.add_to_history("assistant", response)
         return response

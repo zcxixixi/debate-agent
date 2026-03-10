@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Optional
+from typing import Optional, AsyncGenerator
 from openai import OpenAI
 
 
@@ -27,7 +27,7 @@ class BaseDebateAgent(ABC):
         temperature: float = 0.7,
         max_tokens: int = 1000,
     ) -> str:
-        """Generate a response using the LLM."""
+        """Generate a response using the LLM (non-streaming)."""
         messages = [{"role": "system", "content": self.system_prompt}]
 
         if conversation_history:
@@ -42,7 +42,102 @@ class BaseDebateAgent(ABC):
             max_tokens=max_tokens,
         )
 
-        return response.choices[0].message.content
+        return response.choices[0].message.content or ""
+
+    def generate_response_stream(
+        self,
+        user_message: str,
+        conversation_history: Optional[list[dict]] = None,
+        temperature: float = 0.7,
+        max_tokens: int = 1000,
+    ):
+        """Generate a streaming response using the LLM.
+
+        Yields chunks of text as they are generated.
+        """
+        messages = [{"role": "system", "content": self.system_prompt}]
+
+        if conversation_history:
+            messages.extend(conversation_history)
+
+        messages.append({"role": "user", "content": user_message})
+
+        try:
+            stream = self.client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                stream=True,  # Enable streaming
+            )
+
+            for chunk in stream:
+                if chunk.choices and chunk.choices[0].delta.content:
+                    yield chunk.choices[0].delta.content
+
+        except Exception as e:
+            # Fallback to non-streaming on error
+            yield f"[Error: {e}]"
+
+    async def generate_response_async(
+        self,
+        user_message: str,
+        conversation_history: Optional[list[dict]] = None,
+        temperature: float = 0.7,
+        max_tokens: int = 1000,
+        stream_callback: Optional[callable] = None,
+    ) -> str:
+        """Generate a response asynchronously with optional streaming callback.
+
+        Args:
+            user_message: The user's message
+            conversation_history: Optional conversation history
+            temperature: Sampling temperature
+            max_tokens: Maximum tokens to generate
+            stream_callback: Optional async callback for each chunk
+
+        Returns:
+            The complete response text
+        """
+        import asyncio
+
+        messages = [{"role": "system", "content": self.system_prompt}]
+
+        if conversation_history:
+            messages.extend(conversation_history)
+
+        messages.append({"role": "user", "content": user_message})
+
+        full_response = ""
+
+        try:
+            stream = self.client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                stream=True,
+            )
+
+            for chunk in stream:
+                if chunk.choices and chunk.choices[0].delta.content:
+                    content = chunk.choices[0].delta.content
+                    full_response += content
+
+                    # Call streaming callback if provided
+                    if stream_callback:
+                        await stream_callback(content)
+                    else:
+                        # Small yield to prevent blocking
+                        await asyncio.sleep(0)
+
+        except Exception as e:
+            error_msg = f"[生成错误: {str(e)[:100]}]"
+            full_response = error_msg
+            if stream_callback:
+                await stream_callback(error_msg)
+
+        return full_response
 
     def add_to_history(self, role: str, content: str):
         """Add a message to conversation history."""

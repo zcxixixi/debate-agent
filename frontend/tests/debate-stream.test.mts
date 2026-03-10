@@ -5,6 +5,8 @@ import {
   applyDebateStreamEvent,
   buildDebateWebSocketUrl,
   createDebateStreamState,
+  getPreferredRoundIndex,
+  stripMarkdownForPreview,
 } from '../lib/debate-stream.ts'
 
 const baseDebate = {
@@ -101,4 +103,32 @@ test('applyDebateStreamEvent accumulates chunks and finalizes round arguments', 
       negative: '完整反方论点',
     },
   ])
+})
+
+test('getPreferredRoundIndex follows the latest in-progress round instead of sticking on an older placeholder', () => {
+  const streamState = createDebateStreamState({
+    ...baseDebate,
+    current_round: 2,
+    arguments: [
+      {
+        round: 1,
+        positive: '',
+        negative: '第一轮反方已完成',
+      },
+      {
+        round: 2,
+        positive: '第二轮正方正在流式生成',
+        negative: '',
+      },
+    ],
+  })
+
+  assert.equal(getPreferredRoundIndex(streamState.debate), 1)
+})
+
+test('stripMarkdownForPreview keeps preview text readable', () => {
+  assert.equal(
+    stripMarkdownForPreview('## 标题\n\n- **重点** 一\n- `代码` 二'),
+    '标题 重点 一 代码 二'
+  )
 })

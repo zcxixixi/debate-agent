@@ -79,6 +79,39 @@ export const createDebateStreamState = (
   thinking: null,
 })
 
+export const stripMarkdownForPreview = (content: string): string =>
+  content
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/!\[.*?\]\(.*?\)/g, ' ')
+    .replace(/\[([^\]]+)\]\((.*?)\)/g, '$1')
+    .replace(/^[>#-]+\s*/gm, '')
+    .replace(/[*_~]+/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+
+export const getPreferredRoundIndex = (debate: DebateState): number => {
+  if (debate.arguments.length === 0) {
+    return 0
+  }
+
+  const currentRoundIndex = debate.arguments.findIndex(
+    (round) => round.round === debate.current_round
+  )
+  if (currentRoundIndex >= 0) {
+    return currentRoundIndex
+  }
+
+  const latestIncompleteIndex = debate.arguments.findLastIndex(
+    (round) => !round.positive || !round.negative
+  )
+  if (latestIncompleteIndex >= 0) {
+    return latestIncompleteIndex
+  }
+
+  return debate.arguments.length - 1
+}
+
 const ensureRound = (debate: DebateState, roundNumber: number): DebateState => {
   if (debate.arguments.some((round) => round.round === roundNumber)) {
     return debate

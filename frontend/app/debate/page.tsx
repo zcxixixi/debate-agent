@@ -2,6 +2,7 @@
 
 import { Suspense, useEffect, useRef, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
+import { MarkdownContent } from '@/components/markdown-content'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { DebateResult, fetchDebate, fetchResult, resolveApiBaseUrl } from '@/lib/api'
@@ -9,6 +10,8 @@ import {
   applyDebateStreamEvent,
   buildDebateWebSocketUrl,
   createDebateStreamState,
+  getPreferredRoundIndex,
+  stripMarkdownForPreview,
   type DebateStreamEvent,
   type DebateStreamState,
 } from '@/lib/debate-stream'
@@ -17,8 +20,7 @@ import { cn } from '@/lib/utils'
 function DebatePageContent() {
   const [streamState, setStreamState] = useState<DebateStreamState | null>(null)
   const [result, setResult] = useState<DebateResult | null>(null)
-  const [activeRound, setActiveRound] = useState(0)
-  const [isAnimating, setIsAnimating] = useState(false)
+  const [selectedRoundIndex, setSelectedRoundIndex] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const hasStartedRun = useRef(false)
@@ -59,7 +61,7 @@ function DebatePageContent() {
           null,
       }))
       setResult(debateResult)
-      setActiveRound(Math.max(debateResult.arguments.length - 1, 0))
+      setSelectedRoundIndex(null)
       setLoading(false)
     }
 
@@ -76,7 +78,7 @@ function DebatePageContent() {
         }
 
         setStreamState(createDebateStreamState(state))
-        setActiveRound(Math.max(state.arguments.length - 1, 0))
+        setSelectedRoundIndex(null)
 
         if (state.status === 'completed') {
           await syncFinalResult()
@@ -138,10 +140,6 @@ function DebatePageContent() {
               streamEvent
             )
           )
-
-          if (typeof payload.round === 'number') {
-            setActiveRound(Math.max(payload.round - 1, 0))
-          }
         })
 
         socket.addEventListener('error', () => {
@@ -167,28 +165,23 @@ function DebatePageContent() {
     }
   }, [debateId])
 
-  useEffect(() => {
-    if (!result || result.arguments.length <= 1) {
-      return
-    }
-
-    const timer = window.setInterval(() => {
-      setIsAnimating(true)
-      window.setTimeout(() => {
-        setActiveRound((prev) => (prev + 1) % result.arguments.length)
-        setIsAnimating(false)
-      }, 300)
-    }, 8000)
-
-    return () => window.clearInterval(timer)
-  }, [result])
-
   const rounds = result?.arguments ?? debate?.arguments ?? []
-  const currentRound = rounds[activeRound]
   const topic = result?.topic ?? debate?.topic ?? '正在加载辩题'
   const completedRounds = (debate?.arguments ?? []).filter(
     (round) => round.positive && round.negative
   ).length
+  const activeRoundIndex =
+    selectedRoundIndex ??
+    (result
+      ? Math.max(result.arguments.length - 1, 0)
+      : debate
+        ? getPreferredRoundIndex(debate)
+        : 0)
+  const safeActiveRoundIndex = Math.min(
+    Math.max(activeRoundIndex, 0),
+    Math.max(rounds.length - 1, 0)
+  )
+  const currentRound = rounds[safeActiveRoundIndex]
 
   return (
     <div className="min-h-screen bg-surface-subtle px-6 py-12">
@@ -263,10 +256,25 @@ function DebatePageContent() {
                   已完成 {completedRounds} / {debate?.total_rounds ?? 0} 轮
                 </div>
               </div>
+              {selectedRoundIndex !== null ? (
+                <div className="mt-4 flex justify-end">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setSelectedRoundIndex(null)}
+                  >
+                    跟随直播
+                  </Button>
+                </div>
+              ) : null}
               {moderatorIntro ? (
-                <p className="mt-4 text-sm text-secondary leading-relaxed whitespace-pre-wrap">
-                  {moderatorIntro}
-                </p>
+                <div className="mt-4 rounded-2xl bg-black/[0.02] p-4">
+                  <MarkdownContent
+                    content={moderatorIntro}
+                    compact
+                    className="text-secondary"
+                  />
+                </div>
               ) : null}
             </CardContent>
           </Card>
@@ -279,10 +287,10 @@ function DebatePageContent() {
               {rounds.map((_, index) => (
                 <button
                   key={index}
-                  onClick={() => setActiveRound(index)}
+                  onClick={() => setSelectedRoundIndex(index)}
                   className={cn(
                     "h-1 rounded-full transition-all duration-300",
-                    activeRound === index
+                    safeActiveRoundIndex === index
                       ? "bg-primary w-8"
                       : "bg-black/10 w-4 hover:bg-black/20"
                   )}
@@ -292,10 +300,7 @@ function DebatePageContent() {
 
             {/* Debate Cards */}
             {currentRound ? (
-              <div className={cn(
-                "grid md:grid-cols-2 gap-4 transition-opacity duration-300",
-                isAnimating && "opacity-40"
-              )}>
+              <div className="grid md:grid-cols-2 gap-4">
                 <Card className="border-0 overflow-hidden">
                   <div className="h-0.5 bg-accent-blue" />
                   <CardHeader className="pb-2">
@@ -311,12 +316,16 @@ function DebatePageContent() {
                       </div>
                     </div>
                   </CardHeader>
-                    <CardContent className="pt-0">
-                      <p className="text-sm text-secondary leading-relaxed">
-                      {currentRound.positive || '正方正在生成本轮观点...'}
+                  <CardContent className="pt-0">
+                    {currentRound.positive ? (
+                      <MarkdownContent content={currentRound.positive} />
+                    ) : (
+                      <p className="text-sm font-medium text-secondary leading-relaxed">
+                        正方正在生成本轮观点...
                       </p>
-                    </CardContent>
-                  </Card>
+                    )}
+                  </CardContent>
+                </Card>
 
                 <Card className="border-0 overflow-hidden">
                   <div className="h-0.5 bg-accent-red" />
@@ -333,12 +342,16 @@ function DebatePageContent() {
                       </div>
                     </div>
                   </CardHeader>
-                    <CardContent className="pt-0">
-                      <p className="text-sm text-secondary leading-relaxed">
-                      {currentRound.negative || '反方正在生成本轮观点...'}
+                  <CardContent className="pt-0">
+                    {currentRound.negative ? (
+                      <MarkdownContent content={currentRound.negative} />
+                    ) : (
+                      <p className="text-sm font-medium text-secondary leading-relaxed">
+                        反方正在生成本轮观点...
                       </p>
-                    </CardContent>
-                  </Card>
+                    )}
+                  </CardContent>
+                </Card>
               </div>
             ) : null}
 
@@ -351,11 +364,11 @@ function DebatePageContent() {
                     key={round.round}
                     className={cn(
                       "border-0 cursor-pointer transition-all duration-200",
-                      activeRound === index
+                      safeActiveRoundIndex === index
                         ? "ring-1 ring-primary/20 bg-white shadow-soft-md"
                         : "bg-white/60 hover:bg-white"
                     )}
-                    onClick={() => setActiveRound(index)}
+                    onClick={() => setSelectedRoundIndex(index)}
                   >
                     <CardContent className="p-4">
                       <div className="flex items-center justify-between mb-2">
@@ -369,7 +382,7 @@ function DebatePageContent() {
                           <span className="text-accent-blue font-medium shrink-0">正方</span>
                           <span className="line-clamp-1">
                             {round.positive
-                              ? `${round.positive.slice(0, 40)}...`
+                              ? `${stripMarkdownForPreview(round.positive).slice(0, 40)}...`
                               : '生成中...'}
                           </span>
                         </div>
@@ -377,7 +390,7 @@ function DebatePageContent() {
                           <span className="text-accent-red font-medium shrink-0">反方</span>
                           <span className="line-clamp-1">
                             {round.negative
-                              ? `${round.negative.slice(0, 40)}...`
+                              ? `${stripMarkdownForPreview(round.negative).slice(0, 40)}...`
                               : '生成中...'}
                           </span>
                         </div>

@@ -1,12 +1,11 @@
-"""WebSocket support for real-time debate updates."""
+"""WebSocket support for real-time debate updates with true streaming."""
 
 from fastapi import WebSocket, WebSocketDisconnect
 from typing import Optional
 import asyncio
-import json
 
 from app.services import DebateService
-from app.schemas import DebateStatus
+from app.schemas import DebateStatus, ArgumentRound
 
 
 class ConnectionManager:
@@ -23,7 +22,8 @@ class ConnectionManager:
 
     def disconnect(self, websocket: WebSocket, debate_id: str):
         if debate_id in self.active_connections:
-            self.active_connections[debate_id].remove(websocket)
+            if websocket in self.active_connections[debate_id]:
+                self.active_connections[debate_id].remove(websocket)
             if not self.active_connections[debate_id]:
                 del self.active_connections[debate_id]
 
@@ -44,10 +44,22 @@ async def stream_debate(
     debate_id: str,
     debate_service: DebateService,
 ):
-    """Stream debate rounds in real-time via WebSocket."""
+    """Stream debate rounds in real-time via WebSocket with true streaming."""
     state = debate_service.get_debate(debate_id)
     if not state:
-        await websocket.send_json({"error": "Debate not found"})
+        await websocket.send_json({"type": "error", "message": "Debate not found"})
+        return
+
+    # Check if already completed
+    existing_result = debate_service.get_result(debate_id)
+    if state.status == DebateStatus.COMPLETED and existing_result:
+        # Send existing result
+        await websocket.send_json({
+            "type": "cached_result",
+            "winner": existing_result.winner.value,
+            "judgment": existing_result.judgment,
+            "recommendation": existing_result.recommendation,
+        })
         return
 
     state.status = DebateStatus.IN_PROGRESS
@@ -63,26 +75,50 @@ async def stream_debate(
     # Get user context from memory
     user_context = ""
     if debate_service.memory_service.enabled:
-        user_context = debate_service.memory_service.get_user_context(
-            user_id="default",
-            query=state.topic,
-        )
+        try:
+            user_context = debate_service.memory_service.get_user_context(
+                user_id="default",
+                query=state.topic,
+            )
+        except Exception:
+            pass
 
-    # Moderator intro
-    moderator_intro = debate_service.moderator_agent.analyze_topic(
-        state.topic, state.context
-    )
-    await websocket.send_json({
-        "type": "moderator",
-        "content": moderator_intro,
-    })
+    moderator_intro = ""
 
-    round_summaries = []
+    async def send_moderator_intro():
+        nonlocal moderator_intro
+
+        try:
+            moderator_intro = await asyncio.to_thread(
+                debate_service.moderator_agent.analyze_topic,
+                state.topic,
+                state.context,
+            )
+        except Exception:
+            moderator_intro = f"辩论开始：{state.topic}"
+
+        try:
+            await websocket.send_json({
+                "type": "moderator",
+                "content": moderator_intro,
+            })
+        except Exception:
+            pass
+
+    moderator_task = asyncio.create_task(send_moderator_intro())
+
+    summary_tasks: list[tuple[int, asyncio.Task[str]]] = []
     positive_last_point = None
     negative_last_point = None
 
     try:
-        for round_num in range(1, state.total_rounds + 1):
+        # Resume from last round if interrupted
+        start_round = state.current_round + 1 if state.arguments else 1
+        if state.arguments:
+            positive_last_point = state.arguments[-1].positive
+            negative_last_point = state.arguments[-1].negative
+
+        for round_num in range(start_round, state.total_rounds + 1):
             state.current_round = round_num
 
             await websocket.send_json({
@@ -95,52 +131,73 @@ async def stream_debate(
             if user_context:
                 enhanced_context = f"{enhanced_context}\n\n历史背景：{user_context}"
 
-            # Positive agent argues
+            # Positive agent argues with streaming
             await websocket.send_json({
                 "type": "thinking",
                 "agent": "positive",
                 "message": "正方思考中...",
             })
 
-            positive_arg = debate_service.positive_agent.argue(
+            positive_chunks = []
+
+            async def positive_callback(chunk: str):
+                positive_chunks.append(chunk)
+                await websocket.send_json({
+                    "type": "stream",
+                    "agent": "positive",
+                    "chunk": chunk,
+                })
+
+            positive_arg = await debate_service.positive_agent.argue_async(
                 topic=state.topic,
                 context=enhanced_context,
                 opponent_last_point=negative_last_point,
                 my_previous_points=state.positive_points,
+                stream_callback=positive_callback,
             )
             positive_last_point = positive_arg
 
             await websocket.send_json({
-                "type": "argument",
+                "type": "argument_complete",
                 "round": round_num,
                 "agent": "positive",
                 "content": positive_arg,
             })
 
-            # Negative agent argues
+            # Negative agent argues with streaming
             await websocket.send_json({
                 "type": "thinking",
                 "agent": "negative",
                 "message": "反方思考中...",
             })
 
-            negative_arg = debate_service.negative_agent.argue(
+            negative_chunks = []
+
+            async def negative_callback(chunk: str):
+                negative_chunks.append(chunk)
+                await websocket.send_json({
+                    "type": "stream",
+                    "agent": "negative",
+                    "chunk": chunk,
+                })
+
+            negative_arg = await debate_service.negative_agent.argue_async(
                 topic=state.topic,
                 context=enhanced_context,
                 opponent_last_point=positive_last_point,
                 my_previous_points=state.negative_points,
+                stream_callback=negative_callback,
             )
             negative_last_point = negative_arg
 
             await websocket.send_json({
-                "type": "argument",
+                "type": "argument_complete",
                 "round": round_num,
                 "agent": "negative",
                 "content": negative_arg,
             })
 
             # Store round
-            from app.schemas import ArgumentRound
             round_data = ArgumentRound(
                 round=round_num,
                 positive=positive_arg,
@@ -150,20 +207,35 @@ async def stream_debate(
             state.positive_points.append(positive_arg)
             state.negative_points.append(negative_arg)
 
-            # Generate and store summary
-            summary = debate_service._generate_round_summary(
-                round_num, positive_arg, negative_arg
-            )
-            round_summaries.append(summary)
+            summary_tasks.append((
+                round_num,
+                asyncio.create_task(
+                    asyncio.to_thread(
+                        debate_service._generate_round_summary,
+                        round_num,
+                        positive_arg,
+                        negative_arg,
+                    )
+                ),
+            ))
 
-            await websocket.send_json({
-                "type": "summary",
-                "round": round_num,
-                "content": summary,
-            })
-
-            # Save state
+            # Save state after each round
             debate_service._save_debate(state)
+
+        round_summaries_by_round = {}
+        for round_num, summary_task in summary_tasks:
+            try:
+                round_summaries_by_round[round_num] = await summary_task
+            except Exception:
+                round_summaries_by_round[round_num] = ""
+
+        round_summaries = [
+            round_summaries_by_round.get(round_num, "")
+            for round_num in range(1, state.total_rounds + 1)
+        ]
+
+        if not moderator_task.done():
+            await moderator_task
 
         # Get judgment
         await websocket.send_json({
@@ -172,7 +244,8 @@ async def stream_debate(
             "message": "裁判评估中...",
         })
 
-        judgment = debate_service.judgment_agent.judge(
+        judgment = await asyncio.to_thread(
+            debate_service.judgment_agent.judge,
             topic=state.topic,
             context=state.context,
             arguments=[arg.model_dump() for arg in state.arguments],
@@ -209,11 +282,14 @@ async def stream_debate(
 
         # Store in memory
         if debate_service.memory_service.enabled:
-            debate_service.memory_service.store_debate(
-                user_id="default",
-                topic=state.topic,
-                result=result.model_dump(),
-            )
+            try:
+                debate_service.memory_service.store_debate(
+                    user_id="default",
+                    topic=state.topic,
+                    result=result.model_dump(),
+                )
+            except Exception:
+                pass
 
         await websocket.send_json({
             "type": "completed",
@@ -222,8 +298,14 @@ async def stream_debate(
 
     except WebSocketDisconnect:
         # Save state on disconnect
+        moderator_task.cancel()
+        for _, summary_task in summary_tasks:
+            summary_task.cancel()
         debate_service._save_debate(state)
     except Exception as e:
+        moderator_task.cancel()
+        for _, summary_task in summary_tasks:
+            summary_task.cancel()
         await websocket.send_json({
             "type": "error",
             "message": str(e),
