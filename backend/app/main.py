@@ -3,8 +3,8 @@
 from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from app.api import router as debate_router
+from app.api.routes import debate_service
 from app.api.websocket import manager, stream_debate
-from app.services import DebateService
 from app.config import get_settings
 
 settings = get_settings()
@@ -32,7 +32,6 @@ app.include_router(debate_router)
 async def websocket_debate(websocket: WebSocket, debate_id: str):
     """WebSocket endpoint for streaming debate in real-time."""
     await manager.connect(websocket, debate_id)
-    debate_service = DebateService()
     try:
         await stream_debate(websocket, debate_id, debate_service)
     except Exception as e:

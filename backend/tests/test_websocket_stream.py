@@ -4,7 +4,12 @@ import asyncio
 import time
 from types import SimpleNamespace
 from unittest import TestCase
+from unittest.mock import patch
 
+from fastapi.testclient import TestClient
+
+import app.main
+from app.api.routes import debate_service as routes_debate_service
 from app.api.websocket import stream_debate
 from app.schemas import DebateState
 
@@ -100,3 +105,17 @@ class WebsocketStreamTests(TestCase):
             event_types.index("round_start"),
             event_types.index("moderator"),
         )
+
+    def test_websocket_route_reuses_http_debate_service_instance(self):
+        async def fake_stream_debate(websocket, debate_id, debate_service):
+            await websocket.send_json(
+                {"shared_service": debate_service is routes_debate_service}
+            )
+
+        with patch("app.main.stream_debate", fake_stream_debate):
+            client = TestClient(app.main.app)
+
+            with client.websocket_connect("/ws/debate/debate-1") as websocket:
+                message = websocket.receive_json()
+
+        self.assertTrue(message["shared_service"])
