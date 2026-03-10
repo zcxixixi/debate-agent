@@ -49,7 +49,28 @@ class MemoryServiceTests(TestCase):
         )
 
         self.assertEqual(memory_id, "memory-123")
-        mock_client.return_value.add.assert_called_once()
+        mock_client.return_value.add.assert_called_once_with(
+            mock_client.return_value.add.call_args.args[0],
+            user_id="user-1",
+            metadata={},
+            async_mode=False,
+        )
+
+    def test_store_debate_falls_back_to_event_identifier(self):
+        with patch("app.services.memory_service.MemoryClient") as mock_client:
+            mock_client.return_value.add.return_value = {
+                "results": [],
+                "event_id": "event-123",
+            }
+            service = MemoryService(api_key="test-key")
+
+        memory_id = service.store_debate(
+            user_id="user-1",
+            topic="Should we adopt renewable energy?",
+            result={"winner": "positive", "recommendation": "Yes"},
+        )
+
+        self.assertEqual(memory_id, "event-123")
 
     def test_get_user_context_limits_and_concatenates_results(self):
         with patch("app.services.memory_service.MemoryClient") as mock_client:
@@ -68,5 +89,21 @@ class MemoryServiceTests(TestCase):
         mock_client.return_value.search.assert_called_once_with(
             "renewable energy",
             user_id="user-1",
+            filters={"user_id": "user-1"},
             limit=5,
+        )
+
+    def test_get_all_user_debates_uses_hosted_filters(self):
+        with patch("app.services.memory_service.MemoryClient") as mock_client:
+            mock_client.return_value.get_all.return_value = {
+                "results": [{"memory": "stored debate"}]
+            }
+            service = MemoryService(api_key="test-key")
+
+        debates = service.get_all_user_debates("user-1")
+
+        self.assertEqual(debates, [{"memory": "stored debate"}])
+        mock_client.return_value.get_all.assert_called_once_with(
+            user_id="user-1",
+            filters={"user_id": "user-1"},
         )

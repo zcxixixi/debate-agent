@@ -53,6 +53,10 @@ class MemoryService:
                 if isinstance(nested_id, str) and nested_id:
                     return nested_id
 
+        event_id = result_data.get("event_id")
+        if isinstance(event_id, str) and event_id:
+            return event_id
+
         return None
 
     def store_debate(
@@ -82,6 +86,7 @@ class MemoryService:
                 memory_text,
                 user_id=user_id,
                 metadata=metadata or {},
+                async_mode=False,
             )
             return self._extract_memory_id(result_data)
         except Exception as e:
@@ -116,6 +121,7 @@ class MemoryService:
                     "round": round_num,
                     "type": "round_summary",
                 },
+                async_mode=False,
             )
             return self._extract_memory_id(result)
         except Exception as e:
@@ -128,7 +134,12 @@ class MemoryService:
             return ""
 
         try:
-            memories = self.memory.search(query, user_id=user_id, limit=5)
+            memories = self.memory.search(
+                query,
+                user_id=user_id,
+                filters={"user_id": user_id},
+                limit=5,
+            )
             if memories and "results" in memories:
                 context_parts = []
                 for mem in memories["results"]:
@@ -147,7 +158,11 @@ class MemoryService:
             return []
 
         try:
-            memories = self.memory.search(topic, user_id=user_id)
+            memories = self.memory.search(
+                topic,
+                user_id=user_id,
+                filters={"user_id": user_id},
+            )
             return memories.get("results", [])
         except Exception as e:
             print(f"Warning: Failed to get topic history: {e}")
@@ -159,7 +174,10 @@ class MemoryService:
             return []
 
         try:
-            memories = self.memory.get_all(user_id=user_id)
+            memories = self.memory.get_all(
+                user_id=user_id,
+                filters={"user_id": user_id},
+            )
             return memories.get("results", [])
         except Exception as e:
             print(f"Warning: Failed to get user memories: {e}")
