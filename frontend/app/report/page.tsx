@@ -2,13 +2,16 @@
 
 import { Suspense, useEffect, useMemo, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
+import { MarkdownContent } from '@/components/markdown-content'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { DebateResult, DebateState, fetchDebate, fetchResult } from '@/lib/api'
+import { stripMarkdownForPreview } from '@/lib/debate-stream'
 import { cn } from '@/lib/utils'
 
 function extractHighlights(points: string[]): string[] {
   return points
+    .map((point) => stripMarkdownForPreview(point))
     .map((point) => point.trim())
     .filter(Boolean)
     .slice(0, 3)
@@ -125,9 +128,13 @@ function ReportPageContent() {
           <h1 className={cn("text-2xl font-semibold mb-1", winnerColor)}>
             {winnerText}获胜
           </h1>
-          <p className="text-sm text-secondary max-w-xl mx-auto">
-            {result.summary ?? `${winnerText}在本轮辩论中获得最终胜出。`}
-          </p>
+          <div className="mx-auto mt-3 max-w-xl text-left">
+            <MarkdownContent
+              content={result.summary ?? `${winnerText}在本轮辩论中获得最终胜出。`}
+              compact
+              className="text-secondary"
+            />
+          </div>
         </div>
 
         {/* Debate Stats */}
@@ -229,7 +236,10 @@ function ReportPageContent() {
               </span>
               辩论分析
             </h3>
-            <p className="text-sm text-secondary leading-relaxed whitespace-pre-wrap">{result.judgment}</p>
+            <MarkdownContent
+              content={result.judgment}
+              className="text-secondary"
+            />
           </CardContent>
         </Card>
 
@@ -245,7 +255,10 @@ function ReportPageContent() {
               </span>
               行动建议
             </h3>
-            <p className="text-sm text-secondary leading-relaxed whitespace-pre-wrap">{result.recommendation}</p>
+            <MarkdownContent
+              content={result.recommendation}
+              className="text-secondary"
+            />
           </CardContent>
         </Card>
 

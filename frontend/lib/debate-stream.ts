@@ -112,6 +112,107 @@ export const getPreferredRoundIndex = (debate: DebateState): number => {
   return debate.arguments.length - 1
 }
 
+const cloneRound = (round: DebateState['arguments'][number]) => ({
+  ...round,
+})
+
+const cloneDebate = (debate: DebateState): DebateState => ({
+  ...debate,
+  arguments: debate.arguments.map(cloneRound),
+  positive_points: [...debate.positive_points],
+  negative_points: [...debate.negative_points],
+})
+
+const advanceTextPlayback = (
+  targetContent: string,
+  currentContent: string,
+  maxCharactersPerTick: number
+): string => {
+  if (targetContent === currentContent) {
+    return currentContent
+  }
+
+  const safeStep = Math.max(maxCharactersPerTick, 1)
+  const nextLength = Math.min(
+    targetContent.length,
+    currentContent.length + safeStep
+  )
+
+  return targetContent.slice(0, nextLength)
+}
+
+export const isDebatePlaybackSettled = (
+  liveDebate: DebateState,
+  displayedDebate: DebateState
+): boolean => {
+  if (
+    liveDebate.status !== displayedDebate.status ||
+    liveDebate.current_round !== displayedDebate.current_round ||
+    liveDebate.total_rounds !== displayedDebate.total_rounds ||
+    liveDebate.arguments.length !== displayedDebate.arguments.length
+  ) {
+    return false
+  }
+
+  return liveDebate.arguments.every((liveRound, index) => {
+    const displayedRound = displayedDebate.arguments[index]
+
+    return (
+      displayedRound?.round === liveRound.round &&
+      displayedRound.positive === liveRound.positive &&
+      displayedRound.negative === liveRound.negative
+    )
+  })
+}
+
+export const advanceDebatePlayback = (
+  liveDebate: DebateState,
+  displayedDebate: DebateState,
+  maxCharactersPerTick = 24
+): DebateState => {
+  const nextDebate = cloneDebate(liveDebate)
+
+  nextDebate.arguments = liveDebate.arguments.map((liveRound, index) => {
+    const displayedRound = displayedDebate.arguments[index]
+
+    return {
+      round: liveRound.round,
+      positive: displayedRound?.positive ?? '',
+      negative: displayedRound?.negative ?? '',
+    }
+  })
+
+  for (let index = 0; index < liveDebate.arguments.length; index += 1) {
+    const liveRound = liveDebate.arguments[index]
+    const displayedRound = displayedDebate.arguments[index]
+    const nextRound = nextDebate.arguments[index]
+
+    if (!liveRound || !nextRound) {
+      continue
+    }
+
+    if (liveRound.positive !== (displayedRound?.positive ?? '')) {
+      nextRound.positive = advanceTextPlayback(
+        liveRound.positive,
+        displayedRound?.positive ?? '',
+        maxCharactersPerTick
+      )
+      return nextDebate
+    }
+
+    if (liveRound.negative !== (displayedRound?.negative ?? '')) {
+      nextRound.negative = advanceTextPlayback(
+        liveRound.negative,
+        displayedRound?.negative ?? '',
+        maxCharactersPerTick
+      )
+      return nextDebate
+    }
+  }
+
+  return nextDebate
+}
+
 const ensureRound = (debate: DebateState, roundNumber: number): DebateState => {
   if (debate.arguments.some((round) => round.round === roundNumber)) {
     return debate

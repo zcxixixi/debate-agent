@@ -5,12 +5,20 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import { MarkdownContent } from '@/components/markdown-content'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { DebateResult, fetchDebate, fetchResult, resolveApiBaseUrl } from '@/lib/api'
 import {
+  DebateResult,
+  DebateState,
+  fetchDebate,
+  fetchResult,
+  resolveApiBaseUrl,
+} from '@/lib/api'
+import {
+  advanceDebatePlayback,
   applyDebateStreamEvent,
   buildDebateWebSocketUrl,
   createDebateStreamState,
   getPreferredRoundIndex,
+  isDebatePlaybackSettled,
   stripMarkdownForPreview,
   type DebateStreamEvent,
   type DebateStreamState,
@@ -19,16 +27,20 @@ import { cn } from '@/lib/utils'
 
 function DebatePageContent() {
   const [streamState, setStreamState] = useState<DebateStreamState | null>(null)
+  const [displayedDebate, setDisplayedDebate] = useState<DebateState | null>(null)
   const [result, setResult] = useState<DebateResult | null>(null)
   const [selectedRoundIndex, setSelectedRoundIndex] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const hasStartedRun = useRef(false)
   const completedRef = useRef(false)
+  const activeRoundRef = useRef<HTMLDivElement | null>(null)
+  const liveHistoryRoundRef = useRef<HTMLDivElement | null>(null)
   const router = useRouter()
   const searchParams = useSearchParams()
   const debateId = searchParams.get('id')
   const debate = streamState?.debate ?? null
+  const renderedDebate = result ? null : displayedDebate ?? debate
   const thinking = streamState?.thinking ?? null
   const moderatorIntro = result?.summary ?? streamState?.moderatorIntro ?? null
 
@@ -60,6 +72,7 @@ function DebatePageContent() {
           previousState?.moderatorIntro ??
           null,
       }))
+      setDisplayedDebate(debateState)
       setResult(debateResult)
       setSelectedRoundIndex(null)
       setLoading(false)
@@ -78,6 +91,7 @@ function DebatePageContent() {
         }
 
         setStreamState(createDebateStreamState(state))
+        setDisplayedDebate(state)
         setSelectedRoundIndex(null)
 
         if (state.status === 'completed') {
@@ -165,23 +179,80 @@ function DebatePageContent() {
     }
   }, [debateId])
 
-  const rounds = result?.arguments ?? debate?.arguments ?? []
-  const topic = result?.topic ?? debate?.topic ?? '正在加载辩题'
-  const completedRounds = (debate?.arguments ?? []).filter(
+  useEffect(() => {
+    if (!debate || result) {
+      return
+    }
+
+    setDisplayedDebate((currentDebate) => currentDebate ?? debate)
+  }, [debate, result])
+
+  useEffect(() => {
+    if (!debate || !displayedDebate || result) {
+      return
+    }
+
+    if (isDebatePlaybackSettled(debate, displayedDebate)) {
+      return
+    }
+
+    const playbackTimer = window.setTimeout(() => {
+      setDisplayedDebate((currentDebate) => {
+        if (!currentDebate) {
+          return debate
+        }
+
+        return advanceDebatePlayback(debate, currentDebate, 20)
+      })
+    }, 36)
+
+    return () => window.clearTimeout(playbackTimer)
+  }, [debate, displayedDebate, result])
+
+  const rounds = result?.arguments ?? renderedDebate?.arguments ?? []
+  const topic = result?.topic ?? renderedDebate?.topic ?? debate?.topic ?? '正在加载辩题'
+  const completedRounds = (renderedDebate?.arguments ?? []).filter(
     (round) => round.positive && round.negative
   ).length
+  const liveRoundIndex =
+    renderedDebate && renderedDebate.arguments.length > 0
+      ? getPreferredRoundIndex(renderedDebate)
+      : 0
+  const liveRound = renderedDebate?.arguments[liveRoundIndex]
+  const autoScrollToken =
+    selectedRoundIndex === null && liveRound
+      ? `${liveRound.round}:${Math.floor(
+          (liveRound.positive.length + liveRound.negative.length) / 120
+        )}`
+      : null
   const activeRoundIndex =
     selectedRoundIndex ??
     (result
       ? Math.max(result.arguments.length - 1, 0)
-      : debate
-        ? getPreferredRoundIndex(debate)
+      : renderedDebate
+        ? getPreferredRoundIndex(renderedDebate)
         : 0)
   const safeActiveRoundIndex = Math.min(
     Math.max(activeRoundIndex, 0),
     Math.max(rounds.length - 1, 0)
   )
   const currentRound = rounds[safeActiveRoundIndex]
+
+  useEffect(() => {
+    if (selectedRoundIndex !== null || !autoScrollToken || result) {
+      return
+    }
+
+    const scrollTimer = window.setTimeout(() => {
+      const scrollTarget = liveHistoryRoundRef.current ?? activeRoundRef.current
+      scrollTarget?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'nearest',
+      })
+    }, 120)
+
+    return () => window.clearTimeout(scrollTimer)
+  }, [autoScrollToken, result, selectedRoundIndex])
 
   return (
     <div className="min-h-screen bg-surface-subtle px-6 py-12">
@@ -199,7 +270,7 @@ function DebatePageContent() {
             {topic}
           </h1>
           <p className="text-sm text-secondary">
-            共 {debate?.total_rounds ?? result?.arguments.length ?? 0} 轮辩论
+            共 {renderedDebate?.total_rounds ?? debate?.total_rounds ?? result?.arguments.length ?? 0} 轮辩论
           </p>
         </div>
 
@@ -253,7 +324,7 @@ function DebatePageContent() {
                   </p>
                 </div>
                 <div className="text-xs text-tertiary">
-                  已完成 {completedRounds} / {debate?.total_rounds ?? 0} 轮
+                  已完成 {completedRounds} / {renderedDebate?.total_rounds ?? debate?.total_rounds ?? 0} 轮
                 </div>
               </div>
               {selectedRoundIndex !== null ? (
@@ -300,7 +371,10 @@ function DebatePageContent() {
 
             {/* Debate Cards */}
             {currentRound ? (
-              <div className="grid md:grid-cols-2 gap-4">
+              <div
+                ref={selectedRoundIndex === null ? activeRoundRef : null}
+                className="grid md:grid-cols-2 gap-4"
+              >
                 <Card className="border-0 overflow-hidden">
                   <div className="h-0.5 bg-accent-blue" />
                   <CardHeader className="pb-2">
@@ -362,6 +436,7 @@ function DebatePageContent() {
                 {rounds.map((round, index) => (
                   <Card
                     key={round.round}
+                    ref={selectedRoundIndex === null && index === liveRoundIndex ? liveHistoryRoundRef : null}
                     className={cn(
                       "border-0 cursor-pointer transition-all duration-200",
                       safeActiveRoundIndex === index

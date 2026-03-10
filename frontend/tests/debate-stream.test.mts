@@ -2,10 +2,12 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import {
+  advanceDebatePlayback,
   applyDebateStreamEvent,
   buildDebateWebSocketUrl,
   createDebateStreamState,
   getPreferredRoundIndex,
+  isDebatePlaybackSettled,
   stripMarkdownForPreview,
 } from '../lib/debate-stream.ts'
 
@@ -131,4 +133,92 @@ test('stripMarkdownForPreview keeps preview text readable', () => {
     stripMarkdownForPreview('## 标题\n\n- **重点** 一\n- `代码` 二'),
     '标题 重点 一 代码 二'
   )
+})
+
+test('advanceDebatePlayback reveals only a small slice of streamed text per tick', () => {
+  const rawDebate = {
+    ...baseDebate,
+    current_round: 1,
+    status: 'in_progress',
+    arguments: [
+      {
+        round: 1,
+        positive: '正方完整输出',
+        negative: '',
+      },
+    ],
+  }
+  const displayedDebate = {
+    ...rawDebate,
+    arguments: [
+      {
+        round: 1,
+        positive: '正方',
+        negative: '',
+      },
+    ],
+  }
+
+  const nextDebate = advanceDebatePlayback(rawDebate, displayedDebate, 2)
+
+  assert.equal(nextDebate.arguments[0]?.positive, '正方完整')
+  assert.equal(nextDebate.arguments[0]?.negative, '')
+})
+
+test('advanceDebatePlayback advances to the next speaker after the current one is caught up', () => {
+  const rawDebate = {
+    ...baseDebate,
+    current_round: 1,
+    status: 'in_progress',
+    arguments: [
+      {
+        round: 1,
+        positive: '正方完整输出',
+        negative: '反方完整输出',
+      },
+    ],
+  }
+  const displayedDebate = {
+    ...rawDebate,
+    arguments: [
+      {
+        round: 1,
+        positive: '正方完整输出',
+        negative: '反',
+      },
+    ],
+  }
+
+  const nextDebate = advanceDebatePlayback(rawDebate, displayedDebate, 2)
+
+  assert.equal(nextDebate.arguments[0]?.positive, '正方完整输出')
+  assert.equal(nextDebate.arguments[0]?.negative, '反方完')
+})
+
+test('isDebatePlaybackSettled reports whether the displayed debate still lags behind the live stream', () => {
+  const rawDebate = {
+    ...baseDebate,
+    current_round: 1,
+    status: 'in_progress',
+    arguments: [
+      {
+        round: 1,
+        positive: '正方完整输出',
+        negative: '',
+      },
+    ],
+  }
+  const displayedDebate = {
+    ...rawDebate,
+    arguments: [
+      {
+        round: 1,
+        positive: '正方',
+        negative: '',
+      },
+    ],
+  }
+
+  assert.equal(isDebatePlaybackSettled(rawDebate, displayedDebate), false)
+  assert.equal(isDebatePlaybackSettled(rawDebate, rawDebate), true)
 })
