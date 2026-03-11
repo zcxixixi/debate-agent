@@ -1,7 +1,7 @@
 'use client'
 
 import { Suspense, useEffect, useRef, useState } from 'react'
-import { AnimatePresence, motion } from 'framer-motion'
+import { motion } from 'framer-motion'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { MarkdownContent } from '@/components/markdown-content'
 import { Button } from '@/components/ui/button'
@@ -35,6 +35,10 @@ import {
 import { cn } from '@/lib/utils'
 
 const SOCKET_RECONNECT_DELAY_MS = 1_500
+const roundTransition = {
+  duration: 0.28,
+  ease: [0.22, 1, 0.36, 1],
+} as const
 
 function DebatePageContent() {
   const [streamState, setStreamState] = useState<DebateStreamState | null>(null)
@@ -491,75 +495,72 @@ function DebatePageContent() {
               ))}
             </motion.div>
 
-            <AnimatePresence mode="wait">
-              {currentRound ? (
-                <motion.div
-                  key={`${currentRound.round}-${safeActiveRoundIndex}`}
-                  ref={selectedRoundIndex === null ? activeRoundRef : null}
-                  className="grid gap-4 md:grid-cols-2"
-                  variants={staggerContainer(0.08, 0)}
-                  initial="hidden"
-                  animate="show"
-                  exit={{ opacity: 0, y: -18, transition: { duration: 0.22 } }}
-                >
-                  <motion.div variants={slideReveal(-24)}>
-                    <Card className="border-0 overflow-hidden">
-                      <div className="h-0.5 bg-accent-blue" />
-                      <CardHeader className="pb-2">
-                        <div className="flex items-center gap-3">
-                          <div className="flex h-8 w-8 items-center justify-center rounded-full bg-accent-blue/10">
-                            <svg className="h-4 w-4 text-accent-blue" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                            </svg>
-                          </div>
-                          <div>
-                            <CardTitle className="text-base text-accent-blue">正方观点</CardTitle>
-                            <p className="mt-0.5 text-xs text-tertiary">Round {currentRound.round}</p>
-                          </div>
+            {currentRound ? (
+              <motion.div
+                key={`${currentRound.round}-${safeActiveRoundIndex}`}
+                ref={selectedRoundIndex === null ? activeRoundRef : null}
+                className="grid gap-4 md:grid-cols-2"
+                initial={{ opacity: 0, y: 18 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={roundTransition}
+              >
+                <motion.div variants={slideReveal(-24)} initial="hidden" animate="show">
+                  <Card className="border-0 overflow-hidden">
+                    <div className="h-0.5 bg-accent-blue" />
+                    <CardHeader className="pb-2">
+                      <div className="flex items-center gap-3">
+                        <div className="flex h-8 w-8 items-center justify-center rounded-full bg-accent-blue/10">
+                          <svg className="h-4 w-4 text-accent-blue" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                          </svg>
                         </div>
-                      </CardHeader>
-                      <CardContent className="pt-0">
-                        {currentRound.positive ? (
-                          <MarkdownContent content={currentRound.positive} />
-                        ) : (
-                          <p className="text-sm font-medium leading-relaxed text-secondary">
-                            正方正在生成本轮观点...
-                          </p>
-                        )}
-                      </CardContent>
-                    </Card>
-                  </motion.div>
-
-                  <motion.div variants={slideReveal(24)}>
-                    <Card className="border-0 overflow-hidden">
-                      <div className="h-0.5 bg-accent-red" />
-                      <CardHeader className="pb-2">
-                        <div className="flex items-center gap-3">
-                          <div className="flex h-8 w-8 items-center justify-center rounded-full bg-accent-red/10">
-                            <svg className="h-4 w-4 text-accent-red" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                            </svg>
-                          </div>
-                          <div>
-                            <CardTitle className="text-base text-accent-red">反方观点</CardTitle>
-                            <p className="mt-0.5 text-xs text-tertiary">Round {currentRound.round}</p>
-                          </div>
+                        <div>
+                          <CardTitle className="text-base text-accent-blue">正方观点</CardTitle>
+                          <p className="mt-0.5 text-xs text-tertiary">Round {currentRound.round}</p>
                         </div>
-                      </CardHeader>
-                      <CardContent className="pt-0">
-                        {currentRound.negative ? (
-                          <MarkdownContent content={currentRound.negative} />
-                        ) : (
-                          <p className="text-sm font-medium leading-relaxed text-secondary">
-                            反方正在生成本轮观点...
-                          </p>
-                        )}
-                      </CardContent>
-                    </Card>
-                  </motion.div>
+                      </div>
+                    </CardHeader>
+                    <CardContent className="pt-0">
+                      {currentRound.positive ? (
+                        <MarkdownContent content={currentRound.positive} />
+                      ) : (
+                        <p className="text-sm font-medium leading-relaxed text-secondary">
+                          正方正在生成本轮观点...
+                        </p>
+                      )}
+                    </CardContent>
+                  </Card>
                 </motion.div>
-              ) : null}
-            </AnimatePresence>
+
+                <motion.div variants={slideReveal(24)} initial="hidden" animate="show">
+                  <Card className="border-0 overflow-hidden">
+                    <div className="h-0.5 bg-accent-red" />
+                    <CardHeader className="pb-2">
+                      <div className="flex items-center gap-3">
+                        <div className="flex h-8 w-8 items-center justify-center rounded-full bg-accent-red/10">
+                          <svg className="h-4 w-4 text-accent-red" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                          </svg>
+                        </div>
+                        <div>
+                          <CardTitle className="text-base text-accent-red">反方观点</CardTitle>
+                          <p className="mt-0.5 text-xs text-tertiary">Round {currentRound.round}</p>
+                        </div>
+                      </div>
+                    </CardHeader>
+                    <CardContent className="pt-0">
+                      {currentRound.negative ? (
+                        <MarkdownContent content={currentRound.negative} />
+                      ) : (
+                        <p className="text-sm font-medium leading-relaxed text-secondary">
+                          反方正在生成本轮观点...
+                        </p>
+                      )}
+                    </CardContent>
+                  </Card>
+                </motion.div>
+              </motion.div>
+            ) : null}
 
             <motion.div
               className="mt-10"
