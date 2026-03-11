@@ -1,11 +1,15 @@
 from abc import ABC, abstractmethod
 import asyncio
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 
 import httpx
 from fastapi import WebSocketDisconnect
 from openai import OpenAI, AsyncOpenAI
+
+if TYPE_CHECKING:
+    from app.research.search_service import SearchService
+    from app.research.rag_service import RAGService
 
 
 @dataclass(frozen=True)
@@ -64,6 +68,10 @@ class BaseDebateAgent(ABC):
                 )
             )
 
+        # Research services
+        self.search_service: Optional["SearchService"] = None
+        self.rag_service: Optional["RAGService"] = None
+
     def _build_messages(
         self,
         user_message: str,
@@ -82,15 +90,17 @@ class BaseDebateAgent(ABC):
         if not provider:
             return "openai"
         normalized = provider.strip().lower()
-        if normalized not in {"openai", "anthropic"}:
+        if normalized not in {"openai", "anthropic", "minimax"}:
             raise ValueError(f"Unsupported LLM provider: {provider}")
         return normalized
 
     @staticmethod
     def _anthropic_messages_url(base_url: str) -> str:
         normalized = base_url.rstrip("/")
-        if normalized.endswith("/v1/messages"):
+        if normalized.endswith("/messages"):
             return normalized
+        if normalized.endswith("/v1"):
+            return f"{normalized}/messages"
         return f"{normalized}/v1/messages"
 
     @staticmethod
@@ -211,7 +221,7 @@ class BaseDebateAgent(ABC):
                     attempt_index,
                     len(self._attempts),
                 )
-                if attempt.provider == "anthropic":
+                if attempt.provider in {"anthropic", "minimax"}:
                     response = httpx.post(
                         self._anthropic_messages_url(attempt.base_url),
                         headers={
@@ -275,7 +285,7 @@ class BaseDebateAgent(ABC):
                     attempt_index,
                     len(self._attempts),
                 )
-                if attempt.provider == "anthropic":
+                if attempt.provider in {"anthropic", "minimax"}:
                     response = httpx.post(
                         self._anthropic_messages_url(attempt.base_url),
                         headers={
@@ -356,7 +366,7 @@ class BaseDebateAgent(ABC):
             )
 
             try:
-                if attempt.provider == "anthropic":
+                if attempt.provider in {"anthropic", "minimax"}:
                     async with httpx.AsyncClient(timeout=attempt_timeout) as client:
                         response = await client.post(
                             self._anthropic_messages_url(attempt.base_url),
@@ -495,3 +505,27 @@ class BaseDebateAgent(ABC):
     def argue(self, topic: str, context: Optional[str] = None, **kwargs) -> str:
         """Generate an argument for the debate."""
         pass
+
+    def set_search_service(self, service: "SearchService"):
+        """Set search service for real-time evidence."""
+        self.search_service = service
+
+    def set_rag_service(self, service: "RAGService"):
+        """Set RAG service for knowledge context."""
+        self.rag_service = service
+
+    async def get_research_context(self, topic: str) -> str:
+        """Get combined research context from all services."""
+        contexts = []
+
+        if self.rag_service and self.rag_service.is_available():
+            context = await self.rag_service.get_context(topic)
+            if context:
+                contexts.append(f"[知识库]: {context}")
+
+        if self.search_service and self.search_service.is_available():
+            context = await self.search_service.search_evidence(topic)
+            if context:
+                contexts.append(f"[实时搜索]: {context}")
+
+        return "\n\n".join(contexts)

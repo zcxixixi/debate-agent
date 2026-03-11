@@ -222,3 +222,55 @@ class BaseAgentAsyncFallbackTests(IsolatedAsyncioTestCase):
 
         self.assertEqual(result, "官方MiniMax返回成功")
         self.assertEqual("".join(streamed_chunks), "官方MiniMax返回成功")
+
+
+class AnthropicCompatibleUrlTests(TestCase):
+    def test_anthropic_messages_url_accepts_v1_base(self):
+        self.assertEqual(
+            DummyAgent._anthropic_messages_url("https://api.minimax.chat/v1"),
+            "https://api.minimax.chat/v1/messages",
+        )
+
+    def test_anthropic_messages_url_accepts_messages_base(self):
+        self.assertEqual(
+            DummyAgent._anthropic_messages_url(
+                "https://api.minimax.chat/v1/messages"
+            ),
+            "https://api.minimax.chat/v1/messages",
+        )
+
+    @patch("app.agents.base.httpx.post")
+    @patch("app.agents.base.AsyncOpenAI")
+    @patch("app.agents.base.OpenAI")
+    def test_generate_response_supports_minimax_provider_via_messages_api(
+        self,
+        mock_openai,
+        mock_async_openai,
+        mock_http_post,
+    ):
+        response = MagicMock()
+        response.json.return_value = {
+            "content": [{"type": "text", "text": "MiniMax 同步返回成功"}]
+        }
+        response.raise_for_status.return_value = None
+        mock_http_post.return_value = response
+        mock_openai.return_value = MagicMock()
+        mock_async_openai.return_value = MagicMock()
+
+        agent = DummyAgent(
+            provider="minimax",
+            api_key="primary-key",
+            base_url="https://api.minimax.chat/v1",
+            model="MiniMax-M2.5",
+            backup_model=None,
+            role_name="测试",
+            system_prompt="system",
+        )
+
+        result = agent.generate_response("hello")
+
+        self.assertEqual(result, "MiniMax 同步返回成功")
+        self.assertEqual(
+            mock_http_post.call_args.args[0],
+            "https://api.minimax.chat/v1/messages",
+        )
