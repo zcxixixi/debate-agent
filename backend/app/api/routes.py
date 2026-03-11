@@ -8,7 +8,7 @@ from app.schemas import (
     DebateState,
     ArgumentRound,
 )
-from app.services import DebateService
+from app.debate import DebateService
 
 router = APIRouter(prefix="/debate", tags=["debate"])
 

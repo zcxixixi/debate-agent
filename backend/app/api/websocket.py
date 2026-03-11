@@ -4,7 +4,7 @@ from fastapi import WebSocket, WebSocketDisconnect
 import asyncio
 
 from app.config import get_settings
-from app.services import DebateService
+from app.debate import DebateService
 from app.schemas import DebateStatus, ArgumentRound
 
 

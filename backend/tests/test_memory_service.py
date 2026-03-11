@@ -3,12 +3,12 @@
 from unittest import TestCase
 from unittest.mock import patch
 
-from app.services.memory_service import MemoryService
+from app.research.memory_service import MemoryService
 
 
 class MemoryServiceTests(TestCase):
     def test_uses_hosted_memory_client_for_api_key_configuration(self):
-        with patch("app.services.memory_service.MemoryClient") as mock_client:
+        with patch("app.research.memory_service.MemoryClient") as mock_client:
             service = MemoryService(
                 api_key="test-key",
                 host="https://api.mem0.example",
@@ -27,7 +27,7 @@ class MemoryServiceTests(TestCase):
 
     def test_disables_service_when_client_init_fails(self):
         with patch(
-            "app.services.memory_service.MemoryClient",
+            "app.research.memory_service.MemoryClient",
             side_effect=RuntimeError("boom"),
         ):
             service = MemoryService(api_key="test-key")
@@ -36,7 +36,7 @@ class MemoryServiceTests(TestCase):
         self.assertIsNone(service.memory)
 
     def test_store_debate_reads_nested_result_identifier(self):
-        with patch("app.services.memory_service.MemoryClient") as mock_client:
+        with patch("app.research.memory_service.MemoryClient") as mock_client:
             mock_client.return_value.add.return_value = {
                 "results": [{"id": "memory-123"}]
             }
@@ -57,7 +57,7 @@ class MemoryServiceTests(TestCase):
         )
 
     def test_store_debate_falls_back_to_event_identifier(self):
-        with patch("app.services.memory_service.MemoryClient") as mock_client:
+        with patch("app.research.memory_service.MemoryClient") as mock_client:
             mock_client.return_value.add.return_value = {
                 "results": [],
                 "event_id": "event-123",
@@ -73,7 +73,7 @@ class MemoryServiceTests(TestCase):
         self.assertEqual(memory_id, "event-123")
 
     def test_get_user_context_limits_and_concatenates_results(self):
-        with patch("app.services.memory_service.MemoryClient") as mock_client:
+        with patch("app.research.memory_service.MemoryClient") as mock_client:
             mock_client.return_value.search.return_value = {
                 "results": [
                     {"memory": "first memory"},
@@ -94,7 +94,7 @@ class MemoryServiceTests(TestCase):
         )
 
     def test_get_all_user_debates_uses_hosted_filters(self):
-        with patch("app.services.memory_service.MemoryClient") as mock_client:
+        with patch("app.research.memory_service.MemoryClient") as mock_client:
             mock_client.return_value.get_all.return_value = {
                 "results": [{"memory": "stored debate"}]
             }

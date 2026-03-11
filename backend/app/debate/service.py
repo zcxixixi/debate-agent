@@ -20,7 +20,7 @@ from app.agents import (
     JudgmentAgent,
     ModeratorAgent,
 )
-from app.services.memory_service import MemoryService
+from app.research import MemoryService
 
 # Database path
 DEFAULT_DB_PATH = Path(__file__).parent.parent.parent / "data" / "debates.db"
