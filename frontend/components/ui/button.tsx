@@ -4,23 +4,23 @@ import { cva, type VariantProps } from "class-variance-authority"
 import { cn } from "@/lib/utils"
 
 const buttonVariants = cva(
-  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-full text-sm font-medium transition-all duration-200 ease-smooth focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-blue/30 focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-40 active:scale-[0.98]",
+  "relative inline-flex items-center justify-center gap-2 overflow-hidden whitespace-nowrap rounded-full text-sm font-medium transition-all duration-300 ease-smooth focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-blue/30 focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-40 active:scale-[0.985] hover:-translate-y-0.5",
   {
     variants: {
       variant: {
         default:
-          "bg-primary text-white hover:bg-primary/90",
+          "bg-[linear-gradient(135deg,#141414_0%,#252a33_55%,#1d4ed8_100%)] text-white shadow-[0_18px_40px_rgba(29,78,216,0.18)] hover:shadow-[0_24px_50px_rgba(29,78,216,0.24)]",
         destructive:
-          "bg-accent-red text-white hover:bg-accent-red/90",
+          "bg-[linear-gradient(135deg,#ef4444_0%,#ff453a_100%)] text-white shadow-[0_18px_40px_rgba(255,69,58,0.2)]",
         outline:
-          "border border-black/10 bg-transparent hover:bg-black/[0.02] hover:border-black/15",
+          "border border-black/10 bg-white/75 text-primary backdrop-blur-md hover:bg-white hover:border-black/15 hover:shadow-soft-md",
         secondary:
-          "bg-black/[0.04] text-primary hover:bg-black/[0.08]",
+          "bg-black/[0.04] text-primary hover:bg-black/[0.08] hover:shadow-soft",
         ghost:
           "hover:bg-black/[0.04]",
         link: "text-primary underline-offset-4 hover:underline",
         gradient:
-          "bg-primary text-white hover:bg-primary/90 shadow-soft-md",
+          "bg-[linear-gradient(135deg,#111827_0%,#1d4ed8_100%)] text-white shadow-soft-md hover:shadow-soft-lg",
       },
       size: {
         default: "h-10 px-5 py-2",
