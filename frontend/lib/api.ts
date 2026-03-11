@@ -42,25 +42,37 @@ interface StartDebateInput {
   rounds?: number
 }
 
-const configuredApiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL?.trim()
-
 function normalizeApiBaseUrl(value: string): string {
   return value.replace(/\/+$/, '')
 }
 
-export function resolveApiBaseUrl(): string {
+function getConfiguredApiBaseUrl(): string | null {
+  const value = process.env.NEXT_PUBLIC_API_BASE_URL?.trim()
+  return value ? normalizeApiBaseUrl(value) : null
+}
+
+export function resolveApiBaseUrl(
+  currentLocation:
+    | Pick<Location, 'hostname' | 'origin'>
+    | null = typeof window !== 'undefined' ? window.location : null
+): string {
+  const configuredApiBaseUrl = getConfiguredApiBaseUrl()
   if (configuredApiBaseUrl) {
-    return normalizeApiBaseUrl(configuredApiBaseUrl)
+    return configuredApiBaseUrl
   }
 
-  if (typeof window !== 'undefined') {
-    const { hostname } = window.location
+  if (currentLocation) {
+    const { hostname, origin } = currentLocation
     if (hostname === 'localhost' || hostname === '127.0.0.1') {
       return 'http://127.0.0.1:8000'
     }
+
+    return normalizeApiBaseUrl(origin)
   }
 
-  throw new Error('Missing NEXT_PUBLIC_API_BASE_URL. Set it before deploying the frontend.')
+  throw new Error(
+    'Missing NEXT_PUBLIC_API_BASE_URL. Set it before deploying the frontend, or use a same-origin deployment.'
+  )
 }
 
 function buildApiUrl(path: string): string {
