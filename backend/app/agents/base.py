@@ -1,9 +1,19 @@
 from abc import ABC, abstractmethod
 import asyncio
+from dataclasses import dataclass
 from typing import Optional
 
+import httpx
 from fastapi import WebSocketDisconnect
 from openai import OpenAI, AsyncOpenAI
+
+
+@dataclass(frozen=True)
+class ModelAttempt:
+    provider: str
+    api_key: str
+    base_url: str
+    model: str
 
 
 class BaseDebateAgent(ABC):
@@ -11,6 +21,7 @@ class BaseDebateAgent(ABC):
 
     def __init__(
         self,
+        provider: str,
         api_key: str,
         base_url: str,
         model: str,
@@ -18,9 +29,11 @@ class BaseDebateAgent(ABC):
         role_name: str,
         system_prompt: str,
         request_timeout_seconds: Optional[float] = None,
+        backup_provider: Optional[str] = None,
+        backup_api_key: Optional[str] = None,
+        backup_base_url: Optional[str] = None,
     ):
-        self.sync_client = OpenAI(api_key=api_key, base_url=base_url)
-        self.async_client = AsyncOpenAI(api_key=api_key, base_url=base_url)
+        self.provider = self._normalize_provider(provider)
         self.model = model
         self.backup_model = (
             backup_model.strip()
@@ -31,6 +44,25 @@ class BaseDebateAgent(ABC):
         self.system_prompt = system_prompt
         self.request_timeout_seconds = request_timeout_seconds
         self._conversation_history: list[dict] = []
+        self._sync_openai_clients: dict[tuple[str, str], OpenAI] = {}
+        self._async_openai_clients: dict[tuple[str, str], AsyncOpenAI] = {}
+        self._attempts = [
+            ModelAttempt(
+                provider=self.provider,
+                api_key=api_key,
+                base_url=base_url,
+                model=model,
+            )
+        ]
+        if self.backup_model:
+            self._attempts.append(
+                ModelAttempt(
+                    provider=self._normalize_provider(backup_provider or self.provider),
+                    api_key=backup_api_key or api_key,
+                    base_url=backup_base_url or base_url,
+                    model=self.backup_model,
+                )
+            )
 
     def _build_messages(
         self,
@@ -45,11 +77,86 @@ class BaseDebateAgent(ABC):
         messages.append({"role": "user", "content": user_message})
         return messages
 
-    def _model_sequence(self) -> list[str]:
-        models = [self.model]
-        if self.backup_model:
-            models.append(self.backup_model)
-        return models
+    @staticmethod
+    def _normalize_provider(provider: Optional[str]) -> str:
+        if not provider:
+            return "openai"
+        normalized = provider.strip().lower()
+        if normalized not in {"openai", "anthropic"}:
+            raise ValueError(f"Unsupported LLM provider: {provider}")
+        return normalized
+
+    @staticmethod
+    def _anthropic_messages_url(base_url: str) -> str:
+        normalized = base_url.rstrip("/")
+        if normalized.endswith("/v1/messages"):
+            return normalized
+        return f"{normalized}/v1/messages"
+
+    @staticmethod
+    def _extract_text_content(payload: dict) -> str:
+        return "".join(
+            block.get("text", "")
+            for block in payload.get("content", [])
+            if block.get("type") == "text"
+        )
+
+    @staticmethod
+    def _chunk_text(content: str, chunk_size: int = 24) -> list[str]:
+        return [
+            content[index:index + chunk_size]
+            for index in range(0, len(content), chunk_size)
+        ] or [""]
+
+    def _get_sync_openai_client(self, attempt: ModelAttempt) -> OpenAI:
+        client_key = (attempt.api_key, attempt.base_url)
+        if client_key not in self._sync_openai_clients:
+            self._sync_openai_clients[client_key] = OpenAI(
+                api_key=attempt.api_key,
+                base_url=attempt.base_url,
+                max_retries=0,
+            )
+        return self._sync_openai_clients[client_key]
+
+    def _get_async_openai_client(self, attempt: ModelAttempt) -> AsyncOpenAI:
+        client_key = (attempt.api_key, attempt.base_url)
+        if client_key not in self._async_openai_clients:
+            self._async_openai_clients[client_key] = AsyncOpenAI(
+                api_key=attempt.api_key,
+                base_url=attempt.base_url,
+                max_retries=0,
+            )
+        return self._async_openai_clients[client_key]
+
+    def _build_anthropic_payload(
+        self,
+        messages: list[dict],
+        attempt: ModelAttempt,
+        temperature: float,
+        max_tokens: int,
+    ) -> dict:
+        system_parts: list[str] = []
+        conversation_messages: list[dict] = []
+
+        for message in messages:
+            role = message.get("role")
+            content = message.get("content", "")
+            if role == "system":
+                system_parts.append(str(content))
+                continue
+            if role not in {"user", "assistant"}:
+                continue
+            conversation_messages.append({"role": role, "content": str(content)})
+
+        payload = {
+            "model": attempt.model,
+            "max_tokens": max_tokens,
+            "messages": conversation_messages,
+            "temperature": temperature,
+        }
+        if system_parts:
+            payload["system"] = "\n\n".join(system_parts)
+        return payload
 
     def _attempt_timeout_seconds(
         self,
@@ -63,13 +170,13 @@ class BaseDebateAgent(ABC):
             return self.request_timeout_seconds
 
         primary_budget = max(
-            min(self.request_timeout_seconds * 0.5, self.request_timeout_seconds - 5.0),
-            5.0,
+            min(self.request_timeout_seconds * 0.75, self.request_timeout_seconds - 8.0),
+            8.0,
         )
         if attempt_index == 0:
             return primary_budget
 
-        return max(self.request_timeout_seconds - primary_budget, 5.0)
+        return max(self.request_timeout_seconds - primary_budget, 8.0)
 
     def _should_retry_with_backup(
         self,
@@ -96,28 +203,50 @@ class BaseDebateAgent(ABC):
     ) -> str:
         """Generate a response using the LLM (non-streaming)."""
         messages = self._build_messages(user_message, conversation_history)
-        models = self._model_sequence()
         last_error: Optional[Exception] = None
 
-        for attempt_index, model_name in enumerate(models):
+        for attempt_index, attempt in enumerate(self._attempts):
             try:
-                response = self.sync_client.chat.completions.create(
-                    model=model_name,
+                timeout_seconds = self._attempt_timeout_seconds(
+                    attempt_index,
+                    len(self._attempts),
+                )
+                if attempt.provider == "anthropic":
+                    response = httpx.post(
+                        self._anthropic_messages_url(attempt.base_url),
+                        headers={
+                            "content-type": "application/json",
+                            "anthropic-version": "2023-06-01",
+                            "x-api-key": attempt.api_key,
+                        },
+                        json=self._build_anthropic_payload(
+                            messages,
+                            attempt,
+                            temperature,
+                            max_tokens,
+                        ),
+                        timeout=timeout_seconds,
+                    )
+                    response.raise_for_status()
+                    return self._extract_text_content(response.json())
+
+                response = self._get_sync_openai_client(attempt).chat.completions.create(
+                    model=attempt.model,
                     messages=messages,
                     temperature=temperature,
                     max_tokens=max_tokens,
-                    timeout=self._attempt_timeout_seconds(attempt_index, len(models)),
+                    timeout=timeout_seconds,
                 )
                 return response.choices[0].message.content or ""
             except Exception as exc:
                 last_error = exc
                 if self._should_retry_with_backup(
                     attempt_index,
-                    len(models),
+                    len(self._attempts),
                     has_partial_response=False,
                 ):
                     print(
-                        f"{self.role_name} 主模型 {model_name} 失败，切换到备用模型 {models[1]}: {exc}"
+                        f"{self.role_name} 主模型 {attempt.model} 失败，切换到备用模型 {self._attempts[1].model}: {exc}"
                     )
                     continue
                 raise
@@ -138,17 +267,43 @@ class BaseDebateAgent(ABC):
         Yields chunks of text as they are generated.
         """
         messages = self._build_messages(user_message, conversation_history)
-        models = self._model_sequence()
 
-        for attempt_index, model_name in enumerate(models):
+        for attempt_index, attempt in enumerate(self._attempts):
             emitted_content = False
             try:
-                stream = self.sync_client.chat.completions.create(
-                    model=model_name,
+                timeout_seconds = self._attempt_timeout_seconds(
+                    attempt_index,
+                    len(self._attempts),
+                )
+                if attempt.provider == "anthropic":
+                    response = httpx.post(
+                        self._anthropic_messages_url(attempt.base_url),
+                        headers={
+                            "content-type": "application/json",
+                            "anthropic-version": "2023-06-01",
+                            "x-api-key": attempt.api_key,
+                        },
+                        json=self._build_anthropic_payload(
+                            messages,
+                            attempt,
+                            temperature,
+                            max_tokens,
+                        ),
+                        timeout=timeout_seconds,
+                    )
+                    response.raise_for_status()
+                    content = self._extract_text_content(response.json())
+                    emitted_content = bool(content)
+                    for chunk in self._chunk_text(content):
+                        yield chunk
+                    return
+
+                stream = self._get_sync_openai_client(attempt).chat.completions.create(
+                    model=attempt.model,
                     messages=messages,
                     temperature=temperature,
                     max_tokens=max_tokens,
-                    timeout=self._attempt_timeout_seconds(attempt_index, len(models)),
+                    timeout=timeout_seconds,
                     stream=True,
                 )
 
@@ -160,11 +315,11 @@ class BaseDebateAgent(ABC):
             except Exception as exc:
                 if self._should_retry_with_backup(
                     attempt_index,
-                    len(models),
+                    len(self._attempts),
                     has_partial_response=emitted_content,
                 ):
                     print(
-                        f"{self.role_name} 主模型 {model_name} 流式失败，切换到备用模型 {models[1]}: {exc}"
+                        f"{self.role_name} 主模型 {attempt.model} 流式失败，切换到备用模型 {self._attempts[1].model}: {exc}"
                     )
                     continue
                 yield f"[Error: {exc}]"
@@ -191,20 +346,43 @@ class BaseDebateAgent(ABC):
             The complete response text
         """
         messages = self._build_messages(user_message, conversation_history)
-        models = self._model_sequence()
 
-        for attempt_index, model_name in enumerate(models):
+        for attempt_index, attempt in enumerate(self._attempts):
             full_response = ""
             emitted_content = False
             attempt_timeout = self._attempt_timeout_seconds(
                 attempt_index,
-                len(models),
+                len(self._attempts),
             )
 
             try:
+                if attempt.provider == "anthropic":
+                    async with httpx.AsyncClient(timeout=attempt_timeout) as client:
+                        response = await client.post(
+                            self._anthropic_messages_url(attempt.base_url),
+                            headers={
+                                "content-type": "application/json",
+                                "anthropic-version": "2023-06-01",
+                                "x-api-key": attempt.api_key,
+                            },
+                            json=self._build_anthropic_payload(
+                                messages,
+                                attempt,
+                                temperature,
+                                max_tokens,
+                            ),
+                        )
+                        response.raise_for_status()
+                        full_response = self._extract_text_content(response.json())
+                        emitted_content = bool(full_response)
+                        if stream_callback and full_response:
+                            for chunk in self._chunk_text(full_response):
+                                await stream_callback(chunk)
+                        return full_response
+
                 if attempt_timeout is None:
-                    stream = await self.async_client.chat.completions.create(
-                        model=model_name,
+                    stream = await self._get_async_openai_client(attempt).chat.completions.create(
+                        model=attempt.model,
                         messages=messages,
                         temperature=temperature,
                         max_tokens=max_tokens,
@@ -220,8 +398,8 @@ class BaseDebateAgent(ABC):
                                 await stream_callback(content)
                 else:
                     async with asyncio.timeout(attempt_timeout):
-                        stream = await self.async_client.chat.completions.create(
-                            model=model_name,
+                        stream = await self._get_async_openai_client(attempt).chat.completions.create(
+                            model=attempt.model,
                             messages=messages,
                             temperature=temperature,
                             max_tokens=max_tokens,
@@ -246,11 +424,11 @@ class BaseDebateAgent(ABC):
                     raise WebSocketDisconnect() from exc
                 if self._should_retry_with_backup(
                     attempt_index,
-                    len(models),
+                    len(self._attempts),
                     has_partial_response=emitted_content,
                 ):
                     print(
-                        f"{self.role_name} 主模型 {model_name} 流式失败，切换到备用模型 {models[1]}: {exc}"
+                        f"{self.role_name} 主模型 {attempt.model} 流式失败，切换到备用模型 {self._attempts[1].model}: {exc}"
                     )
                     continue
 
@@ -259,14 +437,14 @@ class BaseDebateAgent(ABC):
                     await stream_callback(error_msg)
                 return full_response or error_msg
             except asyncio.TimeoutError as exc:
-                timeout_error = TimeoutError(f"model {model_name} timed out")
+                timeout_error = TimeoutError(f"model {attempt.model} timed out")
                 if self._should_retry_with_backup(
                     attempt_index,
-                    len(models),
+                    len(self._attempts),
                     has_partial_response=emitted_content,
                 ):
                     print(
-                        f"{self.role_name} 主模型 {model_name} 超时，切换到备用模型 {models[1]}: {timeout_error}"
+                        f"{self.role_name} 主模型 {attempt.model} 超时，切换到备用模型 {self._attempts[1].model}: {timeout_error}"
                     )
                     continue
 
@@ -277,11 +455,11 @@ class BaseDebateAgent(ABC):
             except Exception as exc:
                 if self._should_retry_with_backup(
                     attempt_index,
-                    len(models),
+                    len(self._attempts),
                     has_partial_response=emitted_content,
                 ):
                     print(
-                        f"{self.role_name} 主模型 {model_name} 失败，切换到备用模型 {models[1]}: {exc}"
+                        f"{self.role_name} 主模型 {attempt.model} 失败，切换到备用模型 {self._attempts[1].model}: {exc}"
                     )
                     continue
 

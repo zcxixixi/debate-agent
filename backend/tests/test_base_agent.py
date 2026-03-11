@@ -5,6 +5,8 @@ from types import SimpleNamespace
 from unittest import IsolatedAsyncioTestCase, TestCase
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
+
 from app.agents.base import BaseDebateAgent
 
 
@@ -61,6 +63,7 @@ class BaseAgentFallbackTests(TestCase):
         mock_async_openai.return_value = MagicMock()
 
         agent = DummyAgent(
+            provider="openai",
             api_key="test-key",
             base_url="http://example.com/v1",
             model="glm-5",
@@ -80,6 +83,49 @@ class BaseAgentFallbackTests(TestCase):
         self.assertEqual(
             sync_client.chat.completions.create.call_args_list[1].kwargs["model"],
             "glm-4.7",
+        )
+
+    @patch("app.agents.base.httpx.post")
+    @patch("app.agents.base.AsyncOpenAI")
+    @patch("app.agents.base.OpenAI")
+    def test_generate_response_falls_back_from_anthropic_to_openai_backup(
+        self,
+        mock_openai,
+        mock_async_openai,
+        mock_http_post,
+    ):
+        mock_http_post.side_effect = httpx.ReadTimeout("primary timed out")
+        sync_client = MagicMock()
+        sync_client.chat.completions.create.return_value = SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(content="GLM 兜底成功"),
+                )
+            ]
+        )
+        mock_openai.return_value = sync_client
+        mock_async_openai.return_value = MagicMock()
+
+        agent = DummyAgent(
+            provider="anthropic",
+            api_key="primary-key",
+            base_url="https://api.minimaxi.com/anthropic",
+            model="MiniMax-M2.5",
+            backup_model="glm-4.5-air",
+            role_name="测试",
+            system_prompt="system",
+            request_timeout_seconds=40.0,
+            backup_provider="openai",
+            backup_api_key="backup-key",
+            backup_base_url="http://example.com/v1",
+        )
+
+        result = agent.generate_response("hello")
+
+        self.assertEqual(result, "GLM 兜底成功")
+        self.assertEqual(
+            sync_client.chat.completions.create.call_args.kwargs["model"],
+            "glm-4.5-air",
         )
 
 
@@ -102,6 +148,7 @@ class BaseAgentAsyncFallbackTests(IsolatedAsyncioTestCase):
         mock_openai.return_value = MagicMock()
 
         agent = DummyAgent(
+            provider="openai",
             api_key="test-key",
             base_url="http://example.com/v1",
             model="glm-5",
@@ -131,3 +178,47 @@ class BaseAgentAsyncFallbackTests(IsolatedAsyncioTestCase):
             async_client.chat.completions.create.call_args_list[1].kwargs["model"],
             "glm-4.7",
         )
+
+    @patch("app.agents.base.httpx.AsyncClient")
+    async def test_generate_response_async_supports_anthropic_provider(
+        self,
+        mock_async_client_cls,
+    ):
+        response = MagicMock()
+        response.json.return_value = {
+            "content": [
+                {"type": "text", "text": "官方MiniMax返回成功"}
+            ]
+        }
+        response.raise_for_status.return_value = None
+
+        async_client = MagicMock()
+        async_client.post = AsyncMock(return_value=response)
+        context_manager = MagicMock()
+        context_manager.__aenter__ = AsyncMock(return_value=async_client)
+        context_manager.__aexit__ = AsyncMock(return_value=None)
+        mock_async_client_cls.return_value = context_manager
+
+        agent = DummyAgent(
+            provider="anthropic",
+            api_key="primary-key",
+            base_url="https://api.minimaxi.com/anthropic",
+            model="MiniMax-M2.5",
+            backup_model=None,
+            role_name="测试",
+            system_prompt="system",
+            request_timeout_seconds=40.0,
+        )
+
+        streamed_chunks: list[str] = []
+
+        async def on_chunk(chunk: str):
+            streamed_chunks.append(chunk)
+
+        result = await agent.generate_response_async(
+            "hello",
+            stream_callback=on_chunk,
+        )
+
+        self.assertEqual(result, "官方MiniMax返回成功")
+        self.assertEqual("".join(streamed_chunks), "官方MiniMax返回成功")

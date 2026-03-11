@@ -81,32 +81,48 @@ class DebateService:
 
         # Initialize agents
         self.positive_agent = PositiveAgent(
-            api_key=settings.glm_api_key,
-            base_url=settings.glm_base_url,
-            model=settings.glm_model,
-            backup_model=settings.glm_backup_model,
+            provider=settings.primary_llm_provider,
+            api_key=settings.resolved_primary_llm_api_key,
+            base_url=settings.resolved_primary_llm_base_url,
+            model=settings.resolved_primary_llm_model,
+            backup_model=settings.resolved_backup_llm_model,
             request_timeout_seconds=request_timeout_seconds,
+            backup_provider=settings.backup_llm_provider,
+            backup_api_key=settings.resolved_backup_llm_api_key,
+            backup_base_url=settings.resolved_backup_llm_base_url,
         )
         self.negative_agent = NegativeAgent(
-            api_key=settings.glm_api_key,
-            base_url=settings.glm_base_url,
-            model=settings.glm_model,
-            backup_model=settings.glm_backup_model,
+            provider=settings.primary_llm_provider,
+            api_key=settings.resolved_primary_llm_api_key,
+            base_url=settings.resolved_primary_llm_base_url,
+            model=settings.resolved_primary_llm_model,
+            backup_model=settings.resolved_backup_llm_model,
             request_timeout_seconds=request_timeout_seconds,
+            backup_provider=settings.backup_llm_provider,
+            backup_api_key=settings.resolved_backup_llm_api_key,
+            backup_base_url=settings.resolved_backup_llm_base_url,
         )
         self.judgment_agent = JudgmentAgent(
-            api_key=settings.glm_api_key,
-            base_url=settings.glm_base_url,
-            model=settings.glm_model,
-            backup_model=settings.glm_backup_model,
+            provider=settings.primary_llm_provider,
+            api_key=settings.resolved_primary_llm_api_key,
+            base_url=settings.resolved_primary_llm_base_url,
+            model=settings.resolved_primary_llm_model,
+            backup_model=settings.resolved_backup_llm_model,
             request_timeout_seconds=request_timeout_seconds,
+            backup_provider=settings.backup_llm_provider,
+            backup_api_key=settings.resolved_backup_llm_api_key,
+            backup_base_url=settings.resolved_backup_llm_base_url,
         )
         self.moderator_agent = ModeratorAgent(
-            api_key=settings.glm_api_key,
-            base_url=settings.glm_base_url,
-            model=settings.glm_model,
-            backup_model=settings.glm_backup_model,
+            provider=settings.primary_llm_provider,
+            api_key=settings.resolved_primary_llm_api_key,
+            base_url=settings.resolved_primary_llm_base_url,
+            model=settings.resolved_primary_llm_model,
+            backup_model=settings.resolved_backup_llm_model,
             request_timeout_seconds=request_timeout_seconds,
+            backup_provider=settings.backup_llm_provider,
+            backup_api_key=settings.resolved_backup_llm_api_key,
+            backup_base_url=settings.resolved_backup_llm_base_url,
         )
 
         # Initialize memory service

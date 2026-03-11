@@ -99,8 +99,13 @@ class JudgmentAgent(BaseDebateAgent):
         model: str,
         backup_model: Optional[str] = None,
         request_timeout_seconds: Optional[float] = None,
+        provider: str = "openai",
+        backup_provider: Optional[str] = None,
+        backup_api_key: Optional[str] = None,
+        backup_base_url: Optional[str] = None,
     ):
         super().__init__(
+            provider=provider,
             api_key=api_key,
             base_url=base_url,
             model=model,
@@ -108,6 +113,9 @@ class JudgmentAgent(BaseDebateAgent):
             role_name="裁判",
             system_prompt=JUDGMENT_SYSTEM_PROMPT,
             request_timeout_seconds=request_timeout_seconds,
+            backup_provider=backup_provider,
+            backup_api_key=backup_api_key,
+            backup_base_url=backup_base_url,
         )
 
     def argue(
